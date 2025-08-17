@@ -1,6 +1,9 @@
 package http
 
-import "github.com/gin-gonic/gin"
+import (
+	"github.com/gin-gonic/gin"
+	"time"
+)
 
 func NewRouter(h *Handler) *gin.Engine {
 	r := gin.New()
@@ -9,10 +12,12 @@ func NewRouter(h *Handler) *gin.Engine {
 
 	r.GET("/healthz", h.Healthz)
 
+	rl := RateLimit(LimiterDeps{R: h.Redis, Limit: h.RateLimitPerMin, Window: time.Minute})
+
 	api := r.Group("/api/auth")
 	{
-		api.POST("/register", h.Register)
-		api.POST("/login", h.Login)
+		api.POST("/register", rl, h.Register)
+		api.POST("/login", rl, h.Login)
 		api.POST("/refresh", h.Refresh)
 		api.POST("/logout", h.Logout)
 		api.GET("/me", AuthJWT(h.JWTSecret), h.Me)

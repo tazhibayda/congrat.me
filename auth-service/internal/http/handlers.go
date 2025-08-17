@@ -12,13 +12,21 @@ import (
 )
 
 type Handler struct {
-	Store      *repo.Store
-	JWTSecret  string
-	RefreshTTL time.Duration
+	Store           *repo.Store
+	JWTSecret       string
+	RefreshTTL      time.Duration
+	Redis           *repo.Redis
+	RateLimitPerMin int
 }
 
-func NewHandler(store *repo.Store, jwtSecret string, refreshDays int) *Handler {
-	return &Handler{Store: store, JWTSecret: jwtSecret, RefreshTTL: time.Duration(refreshDays) * 24 * time.Hour}
+func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.Redis, rlPerMin int) *Handler {
+	return &Handler{
+		Store:           store,
+		JWTSecret:       jwtSecret,
+		RefreshTTL:      time.Duration(refreshDays) * 24 * time.Hour,
+		Redis:           rds,
+		RateLimitPerMin: rlPerMin,
+	}
 }
 
 type registerReq struct {

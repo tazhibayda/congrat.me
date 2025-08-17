@@ -31,7 +31,14 @@ func main() {
 	}
 	defer store.Close(context.Background())
 
-	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays)
+	rds := repo.NewRedis(cfg.RedisAddr)
+	err = rds.Ping(context.Background())
+	if err != nil {
+		log.Fatalf("redis ping: %v", err)
+	}
+	defer rds.Close()
+
+	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays, rds, cfg.RateLimitPerMin)
 	r := api.NewRouter(h)
 
 	srvErr := make(chan error, 1)
