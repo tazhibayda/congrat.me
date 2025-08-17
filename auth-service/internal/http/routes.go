@@ -9,9 +9,14 @@ func NewRouter(h *Handler) *gin.Engine {
 
 	r.GET("/healthz", h.Healthz)
 
-	// базовые заглушки на будущее (пока НЕ реализуем)
-	// r.POST("/api/auth/register", h.Register)
-	// r.POST("/api/auth/login", h.Login)
+	api := r.Group("/api/auth")
+	{
+		api.POST("/register", h.Register)
+		api.POST("/login", h.Login)
+		api.POST("/refresh", h.Refresh)
+		api.POST("/logout", h.Logout)
+		api.GET("/me", AuthJWT(h.JWTSecret), h.Me)
+	}
 
 	return r
 }

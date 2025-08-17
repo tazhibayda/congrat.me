@@ -21,11 +21,17 @@ func main() {
 
 	store, err := repo.NewStore(ctx, cfg.MongoURI, cfg.MongoDB)
 	if err != nil {
+		if err := store.EnsureUserIndexes(ctx); err != nil {
+			log.Fatalf("ensure indexes: %v", err)
+		}
+		if err := store.EnsureRefreshIndexes(ctx); err != nil {
+			log.Fatalf("ensure refresh indexes: %v", err)
+		}
 		log.Fatalf("mongo connect: %v", err)
 	}
 	defer store.Close(context.Background())
 
-	h := api.NewHandler(store)
+	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays)
 	r := api.NewRouter(h)
 
 	srvErr := make(chan error, 1)
