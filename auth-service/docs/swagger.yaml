@@ -1,0 +1,121 @@
+basePath: /
+definitions:
+  http.loginReq:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  http.loginResp:
+    properties:
+      access:
+        type: string
+      refresh:
+        type: string
+    type: object
+  http.registerReq:
+    properties:
+      email:
+        type: string
+      name:
+        type: string
+      password:
+        type: string
+    type: object
+info:
+  contact: {}
+  title: Auth Service API
+  version: "1.0"
+paths:
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: login
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/http.loginReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/http.loginResp'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Login
+      tags:
+      - auth
+  /api/auth/me:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Current user
+      tags:
+      - auth
+  /api/auth/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: register
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/http.registerReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register user
+      tags:
+      - auth
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

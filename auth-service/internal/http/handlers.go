@@ -35,6 +35,16 @@ type registerReq struct {
 	Name     string `json:"name"`
 }
 
+// Register godoc
+// @Summary Register user
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param payload body registerReq true "register"
+// @Success 201
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /api/auth/register [post]
 func (h *Handler) Register(c *gin.Context) {
 	var in registerReq
 	if err := c.ShouldBindJSON(&in); err != nil {
@@ -72,6 +82,16 @@ type loginResp struct {
 	Refresh string `json:"refresh"`
 }
 
+// Login godoc
+// @Summary Login
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param payload body loginReq true "login"
+// @Success 200 {object} loginResp
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /api/auth/login [post]
 func (h *Handler) Login(c *gin.Context) {
 	var in loginReq
 	if err := c.ShouldBindJSON(&in); err != nil {
@@ -152,7 +172,14 @@ func (h *Handler) Logout(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// Me returns the authenticated user's details
+// Me godoc
+// @Summary Current user
+// @Tags auth
+// @Security BearerAuth
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Failure 401 {object} map[string]string
+// @Router /api/auth/me [get]
 func (h *Handler) Me(c *gin.Context) {
 	au, _ := c.Get(authUserKey)
 	userCtx := au.(AuthUser)

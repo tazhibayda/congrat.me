@@ -8,17 +8,25 @@ import (
 	"syscall"
 	"time"
 
+	docs "github.com/tazhibayda/auth-service/docs"
 	"github.com/tazhibayda/auth-service/internal/config"
 	api "github.com/tazhibayda/auth-service/internal/http"
 	"github.com/tazhibayda/auth-service/internal/repo"
 )
 
+// @title Auth Service API
+// @version 1.0
+// @BasePath /
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
 func main() {
 	cfg := config.Load()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	docs.SwaggerInfo.BasePath = "/"
+	
 	store, err := repo.NewStore(ctx, cfg.MongoURI, cfg.MongoDB)
 	if err != nil {
 		if err := store.EnsureUserIndexes(ctx); err != nil {

@@ -2,6 +2,8 @@ package http
 
 import (
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"time"
 )
 
@@ -9,6 +11,7 @@ func NewRouter(h *Handler) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(RequestID())
+	r.GET("/docs/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	r.GET("/healthz", h.Healthz)
 
