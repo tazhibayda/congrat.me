@@ -1,8 +1,18 @@
 package log
 
-import (
-	"log"
-)
+import "go.uber.org/zap"
 
-func Infof(format string, args ...any)  { log.Printf("[INFO] "+format, args...) }
-func Errorf(format string, args ...any) { log.Printf("[ERROR] "+format, args...) }
+var L *zap.Logger
+
+func Init(prod bool) (func() error, error) {
+	var err error
+	if prod {
+		L, err = zap.NewProduction()
+	} else {
+		L, err = zap.NewDevelopment()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return L.Sync, nil
+}

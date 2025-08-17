@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"github.com/tazhibayda/auth-service/internal/metrics"
+	"go.uber.org/zap"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,6 +14,7 @@ import (
 	docs "github.com/tazhibayda/auth-service/docs"
 	"github.com/tazhibayda/auth-service/internal/config"
 	api "github.com/tazhibayda/auth-service/internal/http"
+	"github.com/tazhibayda/auth-service/internal/log"
 	"github.com/tazhibayda/auth-service/internal/repo"
 )
 
@@ -21,47 +25,77 @@ import (
 // @in header
 // @name Authorization
 func main() {
+	if cleanup, err := log.Init(false); err != nil {
+		panic(err)
+	} else {
+		defer cleanup()
+	}
+
 	cfg := config.Load()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	docs.SwaggerInfo.BasePath = "/"
-	
+	metrics.MustRegister()
+
 	store, err := repo.NewStore(ctx, cfg.MongoURI, cfg.MongoDB)
 	if err != nil {
-		if err := store.EnsureUserIndexes(ctx); err != nil {
-			log.Fatalf("ensure indexes: %v", err)
-		}
-		if err := store.EnsureRefreshIndexes(ctx); err != nil {
-			log.Fatalf("ensure refresh indexes: %v", err)
-		}
-		log.Fatalf("mongo connect: %v", err)
+		log.L.Fatal("mongo connect failed", zap.Error(err))
 	}
 	defer store.Close(context.Background())
 
+	if err := store.EnsureUserIndexes(ctx); err != nil {
+		log.L.Fatal("ensure indexes failed", zap.Error(err))
+	}
+	if err := store.EnsureRefreshIndexes(ctx); err != nil {
+		log.L.Fatal("ensure refresh indexes failed", zap.Error(err))
+	}
+
+	log.L.Info("mongo connected and indexes ensured",
+		zap.String("db", cfg.MongoDB),
+		zap.String("uri", cfg.MongoURI),
+	)
+
 	rds := repo.NewRedis(cfg.RedisAddr)
-	err = rds.Ping(context.Background())
-	if err != nil {
-		log.Fatalf("redis ping: %v", err)
+	{
+		rctx, rcancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer rcancel()
+		if err := rds.Ping(rctx); err != nil {
+			log.L.Fatal("redis ping failed", zap.Error(err), zap.String("addr", cfg.RedisAddr))
+		}
 	}
 	defer rds.Close()
+	log.L.Info("connected to Redis ", zap.String("addr", cfg.RedisAddr))
 
 	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays, rds, cfg.RateLimitPerMin)
 	r := api.NewRouter(h)
 
-	srvErr := make(chan error, 1)
-	go func() { srvErr <- r.Run(":" + cfg.Port) }()
+	srv := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: r,
+	}
 
-	log.Printf("auth-service listening on :%s", cfg.Port)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.L.Error("http server error", zap.Error(err))
+		}
+	}()
+
+	log.L.Info("auth-service listening", zap.String("addr", srv.Addr))
 
 	// graceful shutdown
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	select {
-	case s := <-sig:
-		log.Printf("signal: %s, shutting down", s)
-	case err := <-srvErr:
-		log.Printf("server error: %v", err)
+	sig := <-quit
+	log.L.Info("shutdown signal received", zap.String("signal", sig.String()))
+
+	shCtx, shCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shCancel()
+
+	if err := srv.Shutdown(shCtx); err != nil {
+		log.L.Error("server shutdown error", zap.Error(err))
+	} else {
+		log.L.Info("server stopped gracefully")
 	}
 }

@@ -2,9 +2,14 @@ package http
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/tazhibayda/auth-service/internal/log"
+	"github.com/tazhibayda/auth-service/internal/metrics"
 	"github.com/tazhibayda/auth-service/internal/repo"
 	"github.com/tazhibayda/auth-service/internal/security"
+	"go.uber.org/zap"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -65,6 +70,51 @@ func RateLimit(dep LimiterDeps) gin.HandlerFunc {
 	}
 }
 
+func Prometheus() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		metrics.InFlight.Inc()
+		start := time.Now()
+		c.Next()
+		metrics.InFlight.Dec()
+
+		route := c.FullPath()
+		if route == "" {
+			route = c.Request.URL.Path
+		}
+		metrics.RequestsTotal.WithLabelValues(route, c.Request.Method, strconv.Itoa(c.Writer.Status())).Inc()
+		metrics.ReqDuration.WithLabelValues(route, c.Request.Method).Observe(time.Since(start).Seconds())
+	}
+}
+
+const reqIDHeader = "X-Request-ID"
+
 func RequestID() gin.HandlerFunc {
-	return func(c *gin.Context) { c.Next() }
+	return func(c *gin.Context) {
+		rid := c.GetHeader(reqIDHeader)
+		if rid == "" {
+			rid = uuid.NewString() // go get github.com/google/uuid (если еще не добавили)
+		}
+		c.Set(reqIDHeader, rid)
+		c.Writer.Header().Set(reqIDHeader, rid)
+		c.Next()
+	}
+}
+
+func AccessLog() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		rid, _ := c.Get(reqIDHeader)
+		uid := c.GetString("uid") // если AuthJWT уже положил
+		log.L.Info("http",
+			zap.String("method", c.Request.Method),
+			zap.String("path", c.FullPath()),
+			zap.Int("status", c.Writer.Status()),
+			zap.Duration("latency", time.Since(start)),
+			zap.String("ip", c.ClientIP()),
+			zap.String("req_id", rid.(string)),
+			zap.String("uid", uid),
+			zap.String("ua", c.Request.UserAgent()),
+		)
+	}
 }
