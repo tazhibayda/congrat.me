@@ -3,20 +3,21 @@ package main
 import (
 	"context"
 	"errors"
+	docs "github.com/tazhibayda/auth-service/docs"
+	"github.com/tazhibayda/auth-service/internal/config"
+	api "github.com/tazhibayda/auth-service/internal/http"
+	"github.com/tazhibayda/auth-service/internal/log"
 	"github.com/tazhibayda/auth-service/internal/metrics"
 	"github.com/tazhibayda/auth-service/internal/queue"
+	"github.com/tazhibayda/auth-service/internal/repo"
 	"go.uber.org/zap"
+	_ "gopkg.in/DataDog/dd-trace-go.v1/contrib/gin-gonic/gin"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-
-	docs "github.com/tazhibayda/auth-service/docs"
-	"github.com/tazhibayda/auth-service/internal/config"
-	api "github.com/tazhibayda/auth-service/internal/http"
-	"github.com/tazhibayda/auth-service/internal/log"
-	"github.com/tazhibayda/auth-service/internal/repo"
 )
 
 // @title Auth Service API
@@ -26,6 +27,15 @@ import (
 // @in header
 // @name Authorization
 func main() {
+
+	tracer.Start(
+		tracer.WithEnv("dev"),
+		tracer.WithService("auth-service"),
+		tracer.WithServiceVersion("0.1.0"),
+		tracer.WithRuntimeMetrics(),
+	)
+	defer tracer.Stop()
+
 	if cleanup, err := log.Init(false); err != nil {
 		panic(err)
 	} else {

@@ -5,14 +5,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+	gintrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/gin-gonic/gin"
 	"time"
 )
 
 func NewRouter(h *Handler) *gin.Engine {
 	r := gin.New()
+	r.Use(gintrace.Middleware("auth-service"))
+
 	r.Use(gin.Recovery(), RequestID(), Prometheus())
-	r.GET("/docs/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	r.Use(AccessLog())
+	r.GET("/docs/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	r.GET("/healthz", h.Healthz)
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))

@@ -87,6 +87,7 @@ func Prometheus() gin.HandlerFunc {
 }
 
 const reqIDHeader = "X-Request-ID"
+const loggerKey = "logger"
 
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -102,19 +103,37 @@ func RequestID() gin.HandlerFunc {
 
 func AccessLog() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		rid := c.GetString(reqIDHeader)
+		ctx := c.Request.Context()
+		ctxLogger := log.WithDD(ctx, log.L, zap.String("req_id", rid))
+		c.Set(loggerKey, ctxLogger)
+
 		start := time.Now()
 		c.Next()
-		rid, _ := c.Get(reqIDHeader)
+		route := c.FullPath()
+		if route == "" {
+			route = c.Request.URL.Path
+		}
+
 		uid := c.GetString("uid") // если AuthJWT уже положил
+
 		log.L.Info("http",
 			zap.String("method", c.Request.Method),
-			zap.String("path", c.FullPath()),
+			zap.String("route", route),
 			zap.Int("status", c.Writer.Status()),
 			zap.Duration("latency", time.Since(start)),
 			zap.String("ip", c.ClientIP()),
-			zap.String("req_id", rid.(string)),
 			zap.String("uid", uid),
 			zap.String("ua", c.Request.UserAgent()),
 		)
 	}
+}
+
+func Logger(c *gin.Context) *zap.Logger {
+	if v, ok := c.Get(loggerKey); ok {
+		if l, ok2 := v.(*zap.Logger); ok2 {
+			return l
+		}
+	}
+	return log.L
 }

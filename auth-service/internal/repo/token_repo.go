@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -44,6 +45,12 @@ func hashToken(plain string) string {
 }
 
 func (s *Store) SaveRefresh(ctx context.Context, userID primitive.ObjectID, plain string, ttl time.Duration) error {
+	sp, ctx := tracer.StartSpanFromContext(ctx, "mongo.save_refresh",
+		tracer.Tag("collection", "refresh_tokens"),
+		tracer.Tag("user_id", userID),
+	)
+	defer sp.Finish()
+
 	rt := RefreshToken{
 		UserID:    userID,
 		TokenHash: hashToken(plain),
@@ -52,10 +59,18 @@ func (s *Store) SaveRefresh(ctx context.Context, userID primitive.ObjectID, plai
 		CreatedAt: time.Now().UTC(),
 	}
 	_, err := s.DB.Collection("refresh_tokens").InsertOne(ctx, rt)
+	if err != nil {
+		sp.SetTag("error", err)
+	}
 	return err
 }
 
 func (s *Store) FindValidRefresh(ctx context.Context, plain string) (*RefreshToken, error) {
+	sp, ctx := tracer.StartSpanFromContext(ctx, "mongo.find_refresh",
+		tracer.Tag("collection", "refresh_tokens"),
+	)
+	defer sp.Finish()
+
 	var rt RefreshToken
 	err := s.DB.Collection("refresh_tokens").
 		FindOne(ctx, bson.M{
@@ -66,11 +81,24 @@ func (s *Store) FindValidRefresh(ctx context.Context, plain string) (*RefreshTok
 	if err == mongo.ErrNoDocuments {
 		return nil, nil
 	}
+	if err != nil {
+		sp.SetTag("error", err)
+		return nil, err
+	}
 	return &rt, err
 }
 
 func (s *Store) RevokeRefresh(ctx context.Context, plain string) error {
+	sp, ctx := tracer.StartSpanFromContext(ctx, "mongo.revoke_refresh",
+		tracer.Tag("collection", "refresh_tokens"),
+	)
+	defer sp.Finish()
+
 	_, err := s.DB.Collection("refresh_tokens").
 		UpdateOne(ctx, bson.M{"token_hash": hashToken(plain)}, bson.M{"$set": bson.M{"revoked": true}})
+	if err != nil {
+		sp.SetTag("error", err)
+	}
+
 	return err
 }
