@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/tazhibayda/auth-service/internal/metrics"
+	"github.com/tazhibayda/auth-service/internal/queue"
 	"go.uber.org/zap"
 	"net/http"
 	"os"
@@ -67,7 +68,13 @@ func main() {
 	defer rds.Close()
 	log.L.Info("connected to Redis ", zap.String("addr", cfg.RedisAddr))
 
-	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays, rds, cfg.RateLimitPerMin)
+	pub, err := queue.NewPublisher(cfg.RabbitURL)
+	if err != nil {
+		log.L.Fatal("rabbit connect", zap.Error(err))
+	}
+	defer pub.Close()
+
+	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays, rds, cfg.RateLimitPerMin, pub)
 	r := api.NewRouter(h)
 
 	srv := &http.Server{
@@ -83,7 +90,6 @@ func main() {
 
 	log.L.Info("auth-service listening", zap.String("addr", srv.Addr))
 
-	// graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 

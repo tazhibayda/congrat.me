@@ -2,6 +2,7 @@ package http
 
 import (
 	"github.com/tazhibayda/auth-service/internal/domain"
+	"github.com/tazhibayda/auth-service/internal/queue"
 	"github.com/tazhibayda/auth-service/internal/security"
 	"net/http"
 	"strings"
@@ -17,15 +18,17 @@ type Handler struct {
 	RefreshTTL      time.Duration
 	Redis           *repo.Redis
 	RateLimitPerMin int
+	Events          *queue.Publisher
 }
 
-func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.Redis, rlPerMin int) *Handler {
+func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.Redis, rlPerMin int, pub *queue.Publisher) *Handler {
 	return &Handler{
 		Store:           store,
 		JWTSecret:       jwtSecret,
 		RefreshTTL:      time.Duration(refreshDays) * 24 * time.Hour,
 		Redis:           rds,
 		RateLimitPerMin: rlPerMin,
+		Events:          pub,
 	}
 }
 
@@ -70,6 +73,12 @@ func (h *Handler) Register(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "email already registered"})
 		return
 	}
+
+	reqID, _ := c.Get("X-Request-ID")
+	go h.Events.Publish(c.Request.Context(), "auth.events", "user.registered",
+		queue.UserRegistered{UserID: u.ID, Email: u.Email, Name: u.Name},
+		reqID.(string))
+
 	c.Status(http.StatusCreated)
 }
 
@@ -119,6 +128,12 @@ func (h *Handler) Login(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "refresh save"})
 		return
 	}
+
+	reqID, _ := c.Get("X-Request-ID")
+	go h.Events.Publish(c.Request.Context(), "auth.events", "user.loggedin",
+		queue.UserLoggedIn{UserID: u.ID, Email: u.Email},
+		reqID.(string))
+
 	c.JSON(http.StatusOK, loginResp{Access: tok, Refresh: ref})
 }
 

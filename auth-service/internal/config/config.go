@@ -13,6 +13,7 @@ type Config struct {
 	RefreshTTLDays  int
 	RedisAddr       string
 	RateLimitPerMin int
+	RabbitURL       string
 }
 
 func Load() Config {
@@ -24,6 +25,7 @@ func Load() Config {
 		RefreshTTLDays:  atoi(getenv("REFRESH_TTL_DAYS", "14")),
 		RedisAddr:       getenv("REDIS_ADDR", "localhost:6379"),
 		RateLimitPerMin: atoi(getenv("RATE_LIMIT_PER_MIN", "5")),
+		RabbitURL:       getenv("RABBIT_URL", "amqp://guest:guest@localhost:5672/"),
 	}
 }
 
