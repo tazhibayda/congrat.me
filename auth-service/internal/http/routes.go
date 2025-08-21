@@ -32,6 +32,8 @@ func NewRouter(h *Handler) *gin.Engine {
 		api.POST("/login", rl, h.Login)
 		api.POST("/refresh", h.Refresh)
 		api.POST("/logout", h.Logout)
+		api.POST("/forgot-password", h.ForgotPassword)
+		api.POST("/reset-password", h.ResetPassword)
 		api.GET("/me", AuthJWT(h.Keys), h.Me)
 	}
 

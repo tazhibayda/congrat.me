@@ -6,6 +6,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 	"time"
 )
 
@@ -37,13 +38,26 @@ func (s *Store) EnsureEmailTokenIndexes(ctx context.Context) error {
 }
 
 func (s *Store) CreateEmailToken(ctx context.Context, et EmailToken) error {
+	sp, _ := tracer.StartSpanFromContext(ctx, "mongo.email_token.insert",
+		tracer.Tag("purpose", et.Purpose),
+		tracer.Tag("user_id", et.UserID),
+	)
+	defer sp.Finish()
 	et.CreatedAt = time.Now().UTC()
 	_, err := s.DB.Collection("email_tokens").InsertOne(ctx, et)
+	if err != nil {
+		sp.SetTag("error", err)
+	}
 	return err
 }
 
 func (s *Store) UseEmailToken(ctx context.Context, token, purpose string) (*EmailToken, error) {
 	// один раз: вернём и пометим used
+	sp, _ := tracer.StartSpanFromContext(ctx, "mongo.email_token.consume",
+		tracer.Tag("purpose", purpose),
+	)
+	defer sp.Finish()
+
 	now := time.Now().UTC()
 	res := s.DB.Collection("email_tokens").FindOneAndUpdate(
 		ctx,
@@ -53,6 +67,7 @@ func (s *Store) UseEmailToken(ctx context.Context, token, purpose string) (*Emai
 	)
 	var et EmailToken
 	if err := res.Decode(&et); err != nil {
+		sp.SetTag("error", err)
 		return nil, err
 	}
 	return &et, nil

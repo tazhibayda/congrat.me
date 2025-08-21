@@ -71,7 +71,7 @@ func (s *Store) FindUserByID(ctx context.Context, id primitive.ObjectID) (*domai
 func (s *Store) FindUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	span, ctx := tracer.StartSpanFromContext(ctx, "mongo.find_user",
 		tracer.Tag("collection", "users"),
-		tracer.Tag("email", email),
+		tracer.Tag("email", helper.Hash8(email)),
 	)
 	defer span.Finish()
 	var u domain.User

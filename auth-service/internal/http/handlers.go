@@ -96,7 +96,7 @@ func (h *Handler) Register(c *gin.Context) {
 	hSpan.Finish()
 
 	iSpan, _ := tracer.StartSpanFromContext(ctx, "auth.register.insert_user")
-	u := &domain.User{Email: email, PasswordHash: hash, Name: strings.TrimSpace(in.Name)}
+	u := &domain.User{Email: email, PasswordHash: hash, Name: strings.TrimSpace(in.Name), Provider: "local", Verified: false}
 	if err := h.Store.CreateUser(c.Request.Context(), u); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "email already registered"})
 		return
@@ -116,6 +116,10 @@ func (h *Handler) Register(c *gin.Context) {
 	_ = h.Store.CreateEmailToken(c.Request.Context(), repo.EmailToken{
 		UserID: u.ID, Token: vt, Purpose: "verify", ExpiresAt: time.Now().Add(24 * time.Hour).UTC(),
 	})
+	if err != nil {
+		span.SetTag("error", err)
+		Logger(c).Error("email_token_create_error", zap.Error(err))
+	}
 	// (опц.) Паблишим событие в RabbitMQ для notify-service
 	if h.Events != nil {
 		rid := c.GetString("X-Request-ID")
@@ -123,37 +127,63 @@ func (h *Handler) Register(c *gin.Context) {
 			map[string]any{"user_id": u.ID, "email": u.Email, "token": vt}, rid)
 	}
 
+	Logger(c).Info("email_verify_token_issued_dev",
+		zap.String("user_id", u.ID.String()),
+		zap.String("email_hash", helper.Hash8(u.Email)),
+	)
 	c.JSON(http.StatusCreated, gin.H{"verify_token_dev": vt})
 	return
 }
 
 // GET /api/auth/verify?token=...
 func (h *Handler) VerifyEmail(c *gin.Context) {
+
+	span, ctx := tracer.StartSpanFromContext(c.Request.Context(), "auth.email.verify")
+	defer span.Finish()
+	span.SetTag("route", "/api/auth/verify")
+	if rid := c.GetString("X-Request-ID"); rid != "" {
+		span.SetTag("req_id", rid)
+	}
+
 	t := c.Query("token")
 	if t == "" {
+		span.SetTag("error", "missing token")
+		Logger(c).Warn("verify_missing_token")
 		c.JSON(400, gin.H{"error": "missing token"})
 		return
 	}
 	et, err := h.Store.UseEmailToken(c.Request.Context(), t, "verify")
 	if err != nil {
+		span.SetTag("error", err)
+		Logger(c).Warn("verify_invalid_or_used", zap.Error(err))
 		c.JSON(400, gin.H{"error": "invalid or used token"})
 		return
 	}
 
 	// пометить пользователя verified
+	updSpan, _ := tracer.StartSpanFromContext(ctx, "user.mark_verified")
 	_, err = h.Store.DB.Collection("users").UpdateByID(c.Request.Context(), et.UserID, bson.M{"$set": bson.M{"verified": true}})
 	if err != nil {
+		updSpan.SetTag("error", err)
+		updSpan.Finish()
+		Logger(c).Error("verify_update_user_error", zap.Error(err))
 		c.JSON(500, gin.H{"error": "db error"})
 		return
 	}
+	updSpan.Finish()
 
 	// (опц.) событие
 	if h.Events != nil {
+		parent := span
 		rid := c.GetString("X-Request-ID")
-		go h.Events.Publish(c.Request.Context(), "auth.events", "email.verified",
-			map[string]any{"user_id": et.UserID}, rid)
+		go func() {
+			pubSpan := tracer.StartSpan("email.verified.publish", tracer.ChildOf(parent.Context()))
+			_ = h.Events.Publish(context.Background(), "auth.events", "email.verified", map[string]any{"user_id": et.UserID}, rid)
+			pubSpan.Finish()
+		}()
 	}
 
+	Logger(c).Info("email_verified", zap.String("user_id", et.UserID.String()))
 	c.JSON(200, gin.H{"status": "verified"})
 }
 
@@ -260,9 +290,18 @@ func (h *Handler) Login(c *gin.Context) {
 // @Success 302
 // @Router /api/auth/google/login [get]
 func (h *Handler) GoogleLogin(c *gin.Context) {
+	span, _ := tracer.StartSpanFromContext(c.Request.Context(), "oauth.google.login")
+	defer span.Finish()
+	span.SetTag("route", "/api/auth/google/login")
+	if rid := c.GetString("X-Request-ID"); rid != "" {
+		span.SetTag("req_id", rid)
+	}
 	// state можно привязать к req_id или сессии
 	state := h.Google.MakeState(c.GetString("X-Request-ID"))
 	url := h.Google.AuthURL(state)
+	Logger(c).Info("oauth_google_login_redirect",
+		zap.String("req_id", c.GetString("X-Request-ID")),
+	)
 	c.Redirect(http.StatusFound, url)
 }
 
@@ -275,40 +314,68 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 // @Failure 401 {object} map[string]string
 // @Router /api/auth/google/callback [get]
 func (h *Handler) GoogleCallback(c *gin.Context) {
+	span, ctx := tracer.StartSpanFromContext(c.Request.Context(), "oauth.google.callback")
+	defer span.Finish()
+	span.SetTag("route", "/api/auth/google/callback")
+	if rid := c.GetString("X-Request-ID"); rid != "" {
+		span.SetTag("req_id", rid)
+	}
+
 	st := c.Query("state")
 	if !h.Google.VerifyState(st) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad state"})
+		span.SetTag("error", "bad state")
+		Logger(c).Warn("oauth_google_bad_state")
 		return
 	}
 	code := c.Query("code")
 	if code == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing code"})
+		span.SetTag("error", "missing code")
+		Logger(c).Warn("oauth_google_missing_state")
 		return
 	}
 
-	ctx := c.Request.Context()
 	gu, err := h.Google.ExchangeAndVerify(ctx, code, h.GoogleClientID()) // см. ниже accessor
+	exSpan, _ := tracer.StartSpanFromContext(ctx, "oauth.google.exchange")
 	if err != nil {
+		exSpan.SetTag("error", err)
+		exSpan.Finish()
+		Logger(c).Warn("oauth_google_exchange_failed", zap.Error(err))
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "oauth exchange failed"})
 		return
 	}
+	exSpan.SetTag("email_hash", helper.Hash8(gu.Email))
+	exSpan.Finish()
 
 	// найти юзера
+	findSpan, _ := tracer.StartSpanFromContext(ctx, "user.find_by_provider")
 	u, err := h.Store.FindUserByProviderID(ctx, "google", gu.Sub)
 	if err != nil {
+		findSpan.SetTag("error", err)
+		findSpan.Finish()
+		Logger(c).Error("db_find_provider_error", zap.Error(err))
 		c.JSON(500, gin.H{"error": "db error"})
 		return
 	}
+	findSpan.Finish()
 
 	if u == nil {
 		// попытка по email, если уже есть локальная регистрация — привязываем
+
+		byEmailSpan, _ := tracer.StartSpanFromContext(ctx, "user.find_by_email")
 		ex, err := h.Store.FindUserByEmail(ctx, strings.ToLower(gu.Email))
 		if err != nil {
+			byEmailSpan.SetTag("error", err)
+			byEmailSpan.Finish()
+			Logger(c).Error("db_find_email_error", zap.Error(err))
 			c.JSON(500, gin.H{"error": "db error"})
 			return
 		}
+		byEmailSpan.Finish()
 
 		if ex != nil {
+			updSpan, _ := tracer.StartSpanFromContext(ctx, "user.attach_google")
 			// апдейтим провайдера (можно сделать отдельным методом UpdateUserProvider)
 			ex.Provider = "google"
 			ex.ExternalID = gu.Sub
@@ -318,11 +385,16 @@ func (h *Handler) GoogleCallback(c *gin.Context) {
 				"$set": bson.M{"provider": "google", "external_id": gu.Sub, "verified": ex.Verified},
 			})
 			if err != nil {
+				updSpan.SetTag("error", err)
+				updSpan.Finish()
+				Logger(c).Error("db_update_error", zap.Error(err))
 				c.JSON(500, gin.H{"error": "db error"})
 				return
 			}
+			updSpan.Finish()
 			u = ex
 		} else {
+			crtSpan, _ := tracer.StartSpanFromContext(ctx, "user.create_oauth")
 			// создаём нового OAuth-пользователя
 			u = &domain.User{
 				Email:      strings.ToLower(gu.Email),
@@ -332,15 +404,23 @@ func (h *Handler) GoogleCallback(c *gin.Context) {
 				Verified:   gu.EmailVerified,
 			}
 			if err := h.Store.CreateOAuthUser(ctx, u); err != nil {
+				crtSpan.SetTag("error", err)
+				crtSpan.Finish()
+				Logger(c).Warn("db_create_oauth_conflict", zap.Error(err))
 				c.JSON(409, gin.H{"error": "email already exists"})
 				return
 			}
+			crtSpan.Finish()
 		}
 	}
 
+	tSpan, _ := tracer.StartSpanFromContext(ctx, "auth.issue_tokens")
 	// выдаём наши access (RS256 + kid) и refresh (с ротацией дальше по нашему флоу)
 	access, err := security.MakeAccessRS256(h.Keys, u.ID.String(), u.Email, 15*time.Minute)
 	if err != nil {
+		tSpan.SetTag("error", err)
+		tSpan.Finish()
+		Logger(c).Error("issue_access_error", zap.Error(err))
 		c.JSON(500, gin.H{"error": "token error"})
 		return
 	}
@@ -357,18 +437,33 @@ func (h *Handler) GoogleCallback(c *gin.Context) {
 		UA:        c.Request.UserAgent(),
 		IP:        c.ClientIP(),
 	}); err != nil {
+		tSpan.SetTag("error", err)
+		tSpan.Finish()
+		Logger(c).Error("save_refresh_error", zap.Error(err))
 		c.JSON(500, gin.H{"error": "refresh save"})
 		return
 	}
+	tSpan.Finish()
 
 	// (опц.) публикуем событие user.loggedin (provider=google)
 	if h.Events != nil {
+		parent := span
 		rid := c.GetString("X-Request-ID")
-		go h.Events.Publish(ctx, "auth.events", "user.loggedin",
-			queue.UserLoggedIn{UserID: u.ID, Email: u.Email}, rid)
+		go func() {
+			pubSpan := tracer.StartSpan("auth.loggedin.publish", tracer.ChildOf(parent.Context()))
+			_ = h.Events.Publish(context.Background(), "auth.events", "user.loggedin",
+				queue.UserLoggedIn{UserID: u.ID, Email: u.Email}, rid)
+			pubSpan.Finish()
+		}()
 	}
 
 	// Вернём JSON, чтобы было удобно тестировать из Postman (а не только через редирект на фронт)
+	span.SetTag("user_id", u.ID)
+	span.SetTag("email_hash", helper.Hash8(u.Email))
+	Logger(c).Info("oauth_google_success",
+		zap.String("user_id", u.ID.String()),
+		zap.String("email_hash", helper.Hash8(u.Email)),
+	)
 	c.JSON(200, gin.H{"access": access, "refresh": ref, "provider": "google"})
 }
 
@@ -566,6 +661,130 @@ func (h *Handler) Me(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"id": u.ID, "email": u.Email, "name": u.Name, "created_at": u.CreatedAt,
 	})
+}
+
+type forgotReq struct {
+	Email string `json:"email"`
+}
+
+func (h *Handler) ForgotPassword(c *gin.Context) {
+	span, _ := tracer.StartSpanFromContext(c.Request.Context(), "auth.password.forgot")
+	defer span.Finish()
+	span.SetTag("route", "/api/auth/forgot-password")
+	if rid := c.GetString("X-Request-ID"); rid != "" {
+		span.SetTag("req_id", rid)
+	}
+
+	var in forgotReq
+	if err := c.ShouldBindJSON(&in); err != nil || !strings.Contains(in.Email, "@") {
+		span.SetTag("error", "invalid email")
+		Logger(c).Warn("forgot_invalid_email")
+		c.JSON(400, gin.H{"error": "invalid email"})
+		return
+	}
+	// Найти пользователя (не раскрываем наличие e-mail в ответе)
+	u, _ := h.Store.FindUserByEmail(c.Request.Context(), strings.ToLower(in.Email))
+	if u != nil && u.Provider == "local" { // для OAuth-пользователей reset не шлём
+		rt, _ := security.NewOpaqueToken()
+		if err := h.Store.CreateEmailToken(c.Request.Context(), repo.EmailToken{
+			UserID: u.ID, Token: rt, Purpose: "reset", ExpiresAt: time.Now().Add(30 * time.Minute).UTC(),
+		}); err != nil {
+			span.SetTag("error", err)
+			Logger(c).Error("reset_token_create_error", zap.Error(err))
+		}
+		if h.Events != nil {
+			parent := span
+			rid := c.GetString("X-Request-ID")
+			go func() {
+				pubSpan := tracer.StartSpan("password.reset.requested.publish", tracer.ChildOf(parent.Context()))
+				_ = h.Events.Publish(context.Background(), "auth.events", "password.reset.requested",
+					map[string]any{"user_id": u.ID, "email": u.Email, "token": rt}, rid)
+				pubSpan.Finish()
+			}()
+		}
+		// dev: выдадим токен в ответ, чтобы не настраивать smtp прямо сейчас
+		Logger(c).Info("password_reset_token_issued_dev", zap.String("user_id", u.ID.String()), zap.String("email_hash", helper.Hash8(u.Email)))
+		c.JSON(200, gin.H{"status": "ok", "reset_token_dev": rt})
+		return
+	}
+	c.JSON(200, gin.H{"status": "ok"}) // одинаковый ответ, чтобы не палить, существует ли email
+}
+
+type resetReq struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+func (h *Handler) ResetPassword(c *gin.Context) {
+	span, ctx := tracer.StartSpanFromContext(c.Request.Context(), "auth.password.reset")
+	defer span.Finish()
+	span.SetTag("route", "/api/auth/reset-password")
+	if rid := c.GetString("X-Request-ID"); rid != "" {
+		span.SetTag("req_id", rid)
+	}
+
+	var in resetReq
+	if err := c.ShouldBindJSON(&in); err != nil || len(in.NewPassword) < 8 {
+		span.SetTag("error", "invalid payload")
+		Logger(c).Warn("reset_invalid_payload")
+		c.JSON(400, gin.H{"error": "invalid payload"})
+		return
+	}
+	et, err := h.Store.UseEmailToken(c.Request.Context(), in.Token, "reset")
+	if err != nil {
+		span.SetTag("error", err)
+		Logger(c).Warn("reset_invalid_or_used", zap.Error(err))
+		c.JSON(400, gin.H{"error": "invalid or used token"})
+		return
+	}
+
+	// Обновить пароль
+	hpSpan, _ := tracer.StartSpanFromContext(ctx, "auth.password.hash")
+	hash, err := security.HashPassword(in.NewPassword)
+	if err != nil {
+		hpSpan.SetTag("error", err)
+		hpSpan.Finish()
+		Logger(c).Error("hash_failed", zap.Error(err))
+		c.JSON(500, gin.H{"error": "hash failed"})
+		return
+	}
+	hpSpan.Finish()
+
+	upSpan, _ := tracer.StartSpanFromContext(ctx, "user.update_password")
+	_, err = h.Store.DB.Collection("users").UpdateByID(c.Request.Context(), et.UserID, bson.M{
+		"$set": bson.M{"password_hash": hash},
+	})
+	if err != nil {
+		upSpan.SetTag("error", err)
+		upSpan.Finish()
+		Logger(c).Error("update_password_error", zap.Error(err))
+		c.JSON(500, gin.H{"error": "db error"})
+		return
+	}
+	upSpan.Finish()
+
+	// Ревокация всех refresh-семей пользователя (обнулить активные сессии)
+	rvSpan, _ := tracer.StartSpanFromContext(ctx, "auth.refresh.revoke_all")
+	_, _ = h.Store.DB.Collection("refresh_tokens").UpdateMany(
+		c.Request.Context(),
+		bson.M{"user_id": et.UserID, "revoked": false},
+		bson.M{"$set": bson.M{"revoked": true, "revoked_reason": "password_reset"}},
+	)
+	rvSpan.Finish()
+
+	if h.Events != nil {
+		parent := span
+		rid := c.GetString("X-Request-ID")
+		go func() {
+			pubSpan := tracer.StartSpan("password.reset.done.publish", tracer.ChildOf(parent.Context()))
+			_ = h.Events.Publish(context.Background(), "auth.events", "password.reset.done",
+				map[string]any{"user_id": et.UserID}, rid)
+			pubSpan.Finish()
+		}()
+	}
+
+	Logger(c).Info("password_updated", zap.String("user_id", et.UserID.String()))
+	c.JSON(200, gin.H{"status": "password_updated"})
 }
 
 func (h *Handler) JWKS(c *gin.Context) {
