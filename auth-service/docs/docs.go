@@ -15,11 +15,76 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/.well-known/jwks.json": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "JWKS (public keys)",
+                "responses": {
+                    "200": {
+                        "description": "JWKS",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/forgot-password": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "password"
+                ],
+                "summary": "Request password reset",
+                "parameters": [
+                    {
+                        "description": "forgot payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/http.forgotReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "status; dev: reset_token_dev",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/auth/google/callback": {
             "get": {
+                "produces": [
+                    "application/json"
+                ],
                 "tags": [
                     "oauth"
                 ],
+                "summary": "Google OAuth2 Callback",
                 "parameters": [
                     {
                         "type": "string",
@@ -38,7 +103,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "access, refresh, provider",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -50,18 +115,14 @@ const docTemplate = `{
                         "description": "Bad Request",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -72,6 +133,7 @@ const docTemplate = `{
                 "tags": [
                     "oauth"
                 ],
+                "summary": "Google OAuth2 Login (redirect)",
                 "responses": {
                     "302": {
                         "description": "Found"
@@ -90,10 +152,10 @@ const docTemplate = `{
                 "tags": [
                     "auth"
                 ],
-                "summary": "Login",
+                "summary": "Login (local)",
                 "parameters": [
                     {
-                        "description": "login",
+                        "description": "login payload",
                         "name": "payload",
                         "in": "body",
                         "required": true,
@@ -113,18 +175,48 @@ const docTemplate = `{
                         "description": "Bad Request",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/logout": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Logout (revoke refresh)",
+                "parameters": [
+                    {
+                        "description": "logout payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/http.logoutReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -143,10 +235,10 @@ const docTemplate = `{
                 "tags": [
                     "auth"
                 ],
-                "summary": "Current user",
+                "summary": "Current user profile",
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "id, email, name, created_at",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -156,9 +248,58 @@ const docTemplate = `{
                         "description": "Unauthorized",
                         "schema": {
                             "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/refresh": {
+            "post": {
+                "description": "Always rotates refresh token (rotation \u0026 reuse detection).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Rotate refresh \u0026 issue new access",
+                "parameters": [
+                    {
+                        "description": "refresh payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/http.refreshReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "access, refresh",
+                        "schema": {
+                            "type": "object",
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "invalid or reused refresh",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -175,10 +316,10 @@ const docTemplate = `{
                 "tags": [
                     "auth"
                 ],
-                "summary": "Register user",
+                "summary": "Register user (local)",
                 "parameters": [
                     {
-                        "description": "register",
+                        "description": "register payload",
                         "name": "payload",
                         "in": "body",
                         "required": true,
@@ -189,10 +330,55 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "201": {
-                        "description": "Created"
+                        "description": "dev: verify_token_dev (only in dev)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "409": {
+                        "description": "email already exists",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/reset-password": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "password"
+                ],
+                "summary": "Reset password with token",
+                "parameters": [
+                    {
+                        "description": "reset payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/http.resetReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "status: password_updated",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -200,13 +386,72 @@ const docTemplate = `{
                             }
                         }
                     },
-                    "409": {
-                        "description": "Conflict",
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/verify": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Verify email",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "verification token",
+                        "name": "token",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "status: verified",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/healthz": {
+            "get": {
+                "tags": [
+                    "system"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "ok",
+                        "schema": {
+                            "type": "string"
                         }
                     }
                 }
@@ -214,6 +459,14 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "http.forgotReq": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                }
+            }
+        },
         "http.loginReq": {
             "type": "object",
             "properties": {
@@ -236,6 +489,22 @@ const docTemplate = `{
                 }
             }
         },
+        "http.logoutReq": {
+            "type": "object",
+            "properties": {
+                "refresh": {
+                    "type": "string"
+                }
+            }
+        },
+        "http.refreshReq": {
+            "type": "object",
+            "properties": {
+                "refresh": {
+                    "type": "string"
+                }
+            }
+        },
         "http.registerReq": {
             "type": "object",
             "properties": {
@@ -246,6 +515,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "password": {
+                    "type": "string"
+                }
+            }
+        },
+        "http.resetReq": {
+            "type": "object",
+            "properties": {
+                "new_password": {
+                    "type": "string"
+                },
+                "token": {
                     "type": "string"
                 }
             }
@@ -265,9 +545,9 @@ var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
 	Host:             "",
 	BasePath:         "/",
-	Schemes:          []string{},
+	Schemes:          []string{"http", "https"},
 	Title:            "Auth Service API",
-	Description:      "",
+	Description:      "Authentication & OAuth API (JWT RS256 + JWKS, refresh rotation, email flows)",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

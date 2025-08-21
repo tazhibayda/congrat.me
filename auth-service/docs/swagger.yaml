@@ -1,5 +1,10 @@
 basePath: /
 definitions:
+  http.forgotReq:
+    properties:
+      email:
+        type: string
+    type: object
   http.loginReq:
     properties:
       email:
@@ -14,6 +19,16 @@ definitions:
       refresh:
         type: string
     type: object
+  http.logoutReq:
+    properties:
+      refresh:
+        type: string
+    type: object
+  http.refreshReq:
+    properties:
+      refresh:
+        type: string
+    type: object
   http.registerReq:
     properties:
       email:
@@ -23,11 +38,60 @@ definitions:
       password:
         type: string
     type: object
+  http.resetReq:
+    properties:
+      new_password:
+        type: string
+      token:
+        type: string
+    type: object
 info:
   contact: {}
+  description: Authentication & OAuth API (JWT RS256 + JWKS, refresh rotation, email
+    flows)
   title: Auth Service API
   version: "1.0"
 paths:
+  /.well-known/jwks.json:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: JWKS
+          schema:
+            additionalProperties: true
+            type: object
+      summary: JWKS (public keys)
+      tags:
+      - system
+  /api/auth/forgot-password:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: forgot payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/http.forgotReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'status; dev: reset_token_dev'
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Request password reset
+      tags:
+      - password
   /api/auth/google/callback:
     get:
       parameters:
@@ -41,9 +105,11 @@ paths:
         name: code
         required: true
         type: string
+      produces:
+      - application/json
       responses:
         "200":
-          description: OK
+          description: access, refresh, provider
           schema:
             additionalProperties:
               type: string
@@ -51,15 +117,14 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
         "401":
           description: Unauthorized
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
+      summary: Google OAuth2 Callback
       tags:
       - oauth
   /api/auth/google/login:
@@ -67,6 +132,7 @@ paths:
       responses:
         "302":
           description: Found
+      summary: Google OAuth2 Login (redirect)
       tags:
       - oauth
   /api/auth/login:
@@ -74,7 +140,7 @@ paths:
       consumes:
       - application/json
       parameters:
-      - description: login
+      - description: login payload
         in: body
         name: payload
         required: true
@@ -90,16 +156,36 @@ paths:
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
         "401":
           description: Unauthorized
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
-      summary: Login
+      summary: Login (local)
+      tags:
+      - auth
+  /api/auth/logout:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: logout payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/http.logoutReq'
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Logout (revoke refresh)
       tags:
       - auth
   /api/auth/me:
@@ -108,19 +194,52 @@ paths:
       - application/json
       responses:
         "200":
-          description: OK
+          description: id, email, name, created_at
           schema:
             additionalProperties: true
             type: object
         "401":
           description: Unauthorized
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
       security:
       - BearerAuth: []
-      summary: Current user
+      summary: Current user profile
+      tags:
+      - auth
+  /api/auth/refresh:
+    post:
+      consumes:
+      - application/json
+      description: Always rotates refresh token (rotation & reuse detection).
+      parameters:
+      - description: refresh payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/http.refreshReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: access, refresh
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: invalid or reused refresh
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Rotate refresh & issue new access
       tags:
       - auth
   /api/auth/register:
@@ -128,7 +247,7 @@ paths:
       consumes:
       - application/json
       parameters:
-      - description: register
+      - description: register payload
         in: body
         name: payload
         required: true
@@ -138,22 +257,94 @@ paths:
       - application/json
       responses:
         "201":
-          description: Created
+          description: 'dev: verify_token_dev (only in dev)'
+          schema:
+            additionalProperties: true
+            type: object
         "400":
           description: Bad Request
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
         "409":
-          description: Conflict
+          description: email already exists
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Register user (local)
+      tags:
+      - auth
+  /api/auth/reset-password:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: reset payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/http.resetReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'status: password_updated'
           schema:
             additionalProperties:
               type: string
             type: object
-      summary: Register user
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Reset password with token
       tags:
-      - auth
+      - password
+  /api/auth/verify:
+    get:
+      parameters:
+      - description: verification token
+        in: query
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'status: verified'
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Verify email
+      tags:
+      - email
+  /healthz:
+    get:
+      responses:
+        "200":
+          description: ok
+          schema:
+            type: string
+      summary: Health check
+      tags:
+      - system
+schemes:
+- http
+- https
 securityDefinitions:
   BearerAuth:
     in: header

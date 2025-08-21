@@ -23,9 +23,12 @@ import (
 	"time"
 )
 
-// @title Auth Service API
-// @version 1.0
-// @BasePath /
+// @title           Auth Service API
+// @version         1.0
+// @description     Authentication & OAuth API (JWT RS256 + JWKS, refresh rotation, email flows)
+// @BasePath        /
+// @schemes         http https
+
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
