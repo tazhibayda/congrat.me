@@ -23,9 +23,10 @@ type Handler struct {
 	Redis           *repo.Redis
 	RateLimitPerMin int
 	Events          *queue.Publisher
+	Keys            *security.KeyManager
 }
 
-func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.Redis, rlPerMin int, pub *queue.Publisher) *Handler {
+func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.Redis, rlPerMin int, pub *queue.Publisher, keys *security.KeyManager) *Handler {
 	return &Handler{
 		Store:           store,
 		JWTSecret:       jwtSecret,
@@ -33,6 +34,7 @@ func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.
 		Redis:           rds,
 		RateLimitPerMin: rlPerMin,
 		Events:          pub,
+		Keys:            keys,
 	}
 }
 
@@ -144,7 +146,7 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 	accSpan, _ := tracer.StartSpanFromContext(ctx, "auth.login.issue_access")
-	tok, err := security.MakeAccess(h.JWTSecret, u.ID.String(), u.Email, 15*time.Minute)
+	tok, err := security.MakeAccessRS256(h.Keys, u.ID.String(), u.Email, 15*time.Minute)
 	if err != nil {
 		accSpan.SetTag("error", err)
 		accSpan.Finish()
@@ -163,8 +165,22 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 	refSpan.Finish()
 
+	familyID, _ := security.NewID()
+	jti, _ := security.NewID()
+
 	saveSpan, _ := tracer.StartSpanFromContext(ctx, "auth.login.save_refresh")
-	if err := h.Store.SaveRefresh(c.Request.Context(), u.ID, ref, h.RefreshTTL); err != nil {
+
+	if err := h.Store.SaveRefresh(c.Request.Context(), repo.RefreshToken{
+		UserID:    u.ID,
+		TokenHash: repo.HashToken(ref),
+		FamilyID:  familyID,
+		ParentJTI: "",
+		JTI:       jti,
+		ExpiresAt: time.Now().Add(h.RefreshTTL).UTC(),
+		Revoked:   false,
+		UA:        c.Request.UserAgent(),
+		IP:        c.ClientIP(),
+	}); err != nil {
 		saveSpan.SetTag("error", err)
 		saveSpan.Finish()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "refresh save"})
@@ -210,7 +226,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 	refSpan.Finish()
 
 	valSpan, _ := tracer.StartSpanFromContext(ctx, "auth.refresh.validate")
-	rt, err := h.Store.FindValidRefresh(c.Request.Context(), in.Refresh)
+	rt, err := h.Store.FindByPlain(c.Request.Context(), in.Refresh)
 	if err != nil || rt == nil {
 		valSpan.SetTag("error", "invalid refresh")
 		valSpan.Finish()
@@ -220,6 +236,28 @@ func (h *Handler) Refresh(c *gin.Context) {
 	}
 	valSpan.Finish()
 	// выдаём новый access; (ротацию refresh можно добавить позже)
+	now := time.Now().UTC()
+
+	// 3.1 reuse: токен уже был заменён (или иным образом ревокнут) → блокируем всю семью
+	if rt.Revoked {
+		if rt.ReplacedByJTI != "" {
+			// reuse detected → revoke family
+			reuSpan, _ := tracer.StartSpanFromContext(ctx, "auth.refresh.reuse_detected")
+			_ = h.Store.RevokeFamily(ctx, rt.FamilyID)
+			reuSpan.Finish()
+		}
+		span.SetTag("error", "session invalidated (revoked)")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "session invalidated, please re-login"})
+		return
+	}
+
+	// 3.2 expired
+	if now.After(rt.ExpiresAt) {
+		span.SetTag("error", "expired refresh")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "expired refresh"})
+		return
+	}
+
 	// найдём пользователя (по rt.UserID удобней иметь метод FindUserByID; на первое время можно хранить email в токене refresh, но оставим по userID):
 	uSpan, _ := tracer.StartSpanFromContext(ctx, "auth.refresh.find_user")
 	u, err := h.Store.FindUserByID(c.Request.Context(), rt.UserID)
@@ -233,7 +271,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 	uSpan.Finish()
 
 	aSpan, _ := tracer.StartSpanFromContext(ctx, "auth.refresh.issue_access")
-	tok, err := security.MakeAccess(h.JWTSecret, u.ID.String(), u.Email, 15*time.Minute)
+	tok, err := security.MakeAccessRS256(h.Keys, u.ID.String(), u.Email, 15*time.Minute)
 	if err != nil {
 		aSpan.SetTag("error", err)
 		aSpan.Finish()
@@ -243,9 +281,40 @@ func (h *Handler) Refresh(c *gin.Context) {
 	}
 	aSpan.Finish()
 
+	rotSpan, rotCtx := tracer.StartSpanFromContext(ctx, "auth.refresh.rotate")
+	newJTI, _ := security.NewID()
+	newRef, _ := security.NewRefreshToken()
+	newRec := repo.RefreshToken{
+		UserID:    rt.UserID,
+		TokenHash: repo.HashToken(newRef),
+		FamilyID:  rt.FamilyID,
+		ParentJTI: rt.JTI,
+		JTI:       newJTI,
+		ExpiresAt: now.Add(h.RefreshTTL).UTC(),
+		Revoked:   false,
+		UA:        c.Request.UserAgent(),
+		IP:        c.ClientIP(),
+	}
+	if err := h.Store.SaveRefresh(rotCtx, newRec); err != nil {
+		rotSpan.SetTag("error", err)
+		rotSpan.Finish()
+		span.SetTag("error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "refresh save error"})
+		return
+	}
+	// Старый пометить как заменённый (rotation)
+	if err := h.Store.MarkRotated(rotCtx, rt.JTI, newJTI); err != nil {
+		rotSpan.SetTag("error", err)
+		rotSpan.Finish()
+		span.SetTag("error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "refresh rotate error"})
+		return
+	}
+	rotSpan.Finish()
+
 	// (опционально) ротация: сгенерировать новый refresh, сохранить и вернуть его вместо старого (и пометить старый как revoked)
-	span.SetTag("user_id", u.ID)
-	c.JSON(http.StatusOK, gin.H{"access": tok})
+	span.SetTag("user_id", u.ID.Hex())
+	c.JSON(http.StatusOK, gin.H{"access": tok, "refresh": newRef})
 }
 
 type logoutReq struct {
@@ -299,12 +368,20 @@ func (h *Handler) Me(c *gin.Context) {
 		span.SetTag("req_id", rid)
 	}
 
-	au, _ := c.Get(authUserKey)
-	userCtx := au.(AuthUser)
+	au, ok := c.Get(authUserKey) // тот же ключ, что и в middleware
+	if !ok || au == nil {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	userCtx, ok := au.(AuthUser)
+	if !ok || userCtx.UID == "" {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
 	span.SetTag("user_id", userCtx.UID)
 
 	uSpan, _ := tracer.StartSpanFromContext(ctx, "auth.me.find_user")
-	u, err := h.Store.FindUserByEmail(c.Request.Context(), userCtx.Email)
+	u, err := h.Store.FindUserByEmail(c.Request.Context(), strings.ToLower(userCtx.Email))
 	if err != nil || u == nil {
 		uSpan.SetTag("error", "user not found")
 		uSpan.Finish()
@@ -317,6 +394,10 @@ func (h *Handler) Me(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"id": u.ID, "email": u.Email, "name": u.Name, "created_at": u.CreatedAt,
 	})
+}
+
+func (h *Handler) JWKS(c *gin.Context) {
+	c.JSON(200, h.Keys.JWKS())
 }
 
 func (h *Handler) Healthz(c *gin.Context) {

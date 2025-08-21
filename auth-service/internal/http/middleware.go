@@ -2,6 +2,7 @@ package http
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/tazhibayda/auth-service/internal/log"
 	"github.com/tazhibayda/auth-service/internal/metrics"
@@ -16,22 +17,43 @@ import (
 
 var authUserKey = "authUser" // ключ в контексте
 
-type AuthUser struct{ UID, Email string }
+type AuthUser struct {
+	UID, Email string
+}
 
-func AuthJWT(jwtSecret string) gin.HandlerFunc {
+func AuthJWT(km *security.KeyManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := c.GetHeader("Authorization")
 		if !strings.HasPrefix(strings.ToLower(h), "bearer ") {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
 			return
 		}
-		token := strings.TrimSpace(h[len("Bearer "):])
-		claims, err := security.ParseAccess(jwtSecret, token)
-		if err != nil {
+		tok := strings.TrimSpace(h[len("Bearer "):])
+
+		keyfunc := func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+				return nil, jwt.ErrTokenUnverifiable
+			}
+			kid, _ := t.Header["kid"].(string)
+			if kid == "" {
+				return nil, jwt.ErrTokenUnverifiable
+			}
+			pk, ok := km.PublicByKid(kid)
+			if !ok {
+				return nil, jwt.ErrTokenUnverifiable
+			}
+			return pk, nil
+		}
+
+		token, err := jwt.ParseWithClaims(tok, &security.Claims{}, keyfunc, jwt.WithValidMethods([]string{"RS256"}))
+		if err != nil || !token.Valid {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
+		claims := token.Claims.(*security.Claims)
 		c.Set(authUserKey, AuthUser{UID: claims.UID, Email: claims.Email})
+		c.Set("uid", claims.UID)
+		c.Set("email", claims.Email)
 		c.Next()
 	}
 }

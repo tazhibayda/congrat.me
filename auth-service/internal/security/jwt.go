@@ -38,3 +38,17 @@ func ParseAccess(secret, token string) (*Claims, error) {
 	}
 	return c, nil
 }
+
+func MakeAccessRS256(km *KeyManager, uid, email string, ttl time.Duration) (string, error) {
+	c := Claims{
+		UID: uid, Email: email,
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
+			Subject:   uid,
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, c)
+	token.Header["kid"] = km.Active.Kid
+	return token.SignedString(km.Active.Private)
+}

@@ -10,8 +10,10 @@ import (
 	"github.com/tazhibayda/auth-service/internal/metrics"
 	"github.com/tazhibayda/auth-service/internal/queue"
 	"github.com/tazhibayda/auth-service/internal/repo"
+	"github.com/tazhibayda/auth-service/internal/security"
 	"go.uber.org/zap"
 	_ "gopkg.in/DataDog/dd-trace-go.v1/contrib/gin-gonic/gin"
+	gintrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/gin-gonic/gin"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 	"net/http"
 	"os"
@@ -84,8 +86,14 @@ func main() {
 	}
 	defer pub.Close()
 
-	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays, rds, cfg.RateLimitPerMin, pub)
+	km, err := security.NewKeyManager(cfg.JWTActiveKID, cfg.JWTActiveKeyPath, cfg.JWTNextKID, cfg.JWTNextKeyPath)
+	if err != nil {
+		log.L.Fatal("keys", zap.Error(err))
+	}
+
+	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays, rds, cfg.RateLimitPerMin, pub, km)
 	r := api.NewRouter(h)
+	r.Use(gintrace.Middleware("auth-service"))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
