@@ -5,9 +5,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/tazhibayda/auth-service/internal/domain"
 	"github.com/tazhibayda/auth-service/internal/helper"
+	"github.com/tazhibayda/auth-service/internal/oauth"
 	"github.com/tazhibayda/auth-service/internal/queue"
 	"github.com/tazhibayda/auth-service/internal/repo"
 	"github.com/tazhibayda/auth-service/internal/security"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.uber.org/zap"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 	"net/http"
@@ -17,16 +19,18 @@ import (
 )
 
 type Handler struct {
-	Store           *repo.Store
-	JWTSecret       string
-	RefreshTTL      time.Duration
-	Redis           *repo.Redis
-	RateLimitPerMin int
-	Events          *queue.Publisher
-	Keys            *security.KeyManager
+	Store                    *repo.Store
+	JWTSecret                string
+	RefreshTTL               time.Duration
+	Redis                    *repo.Redis
+	RateLimitPerMin          int
+	Events                   *queue.Publisher
+	Google                   *oauth.GoogleOAuth
+	GoogleClientIDFromConfig string
+	Keys                     *security.KeyManager
 }
 
-func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.Redis, rlPerMin int, pub *queue.Publisher, keys *security.KeyManager) *Handler {
+func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.Redis, rlPerMin int, pub *queue.Publisher, google *oauth.GoogleOAuth, keys *security.KeyManager) *Handler {
 	return &Handler{
 		Store:           store,
 		JWTSecret:       jwtSecret,
@@ -34,8 +38,14 @@ func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.
 		Redis:           rds,
 		RateLimitPerMin: rlPerMin,
 		Events:          pub,
+		Google:          google,
 		Keys:            keys,
 	}
+}
+
+func (h *Handler) SetGoogleClientID(clientID string) {
+	// устанавливаем clientID для Google OAuth
+	h.GoogleClientIDFromConfig = clientID
 }
 
 type registerReq struct {
@@ -202,6 +212,126 @@ func (h *Handler) Login(c *gin.Context) {
 	span.SetTag("user_id", u.ID)
 	c.JSON(http.StatusOK, loginResp{Access: tok, Refresh: ref})
 }
+
+// GoogleLogin @Summary Google OAuth2 Login
+// @Tags oauth
+// @Success 302
+// @Router /api/auth/google/login [get]
+func (h *Handler) GoogleLogin(c *gin.Context) {
+	// state можно привязать к req_id или сессии
+	state := h.Google.MakeState(c.GetString("X-Request-ID"))
+	url := h.Google.AuthURL(state)
+	c.Redirect(http.StatusFound, url)
+}
+
+// GoogleCallback @Summary Google OAuth2 Callback
+// @Tags oauth
+// @Param state query string true "state"
+// @Param code  query string true "code"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /api/auth/google/callback [get]
+func (h *Handler) GoogleCallback(c *gin.Context) {
+	st := c.Query("state")
+	if !h.Google.VerifyState(st) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad state"})
+		return
+	}
+	code := c.Query("code")
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing code"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	gu, err := h.Google.ExchangeAndVerify(ctx, code, h.GoogleClientID()) // см. ниже accessor
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "oauth exchange failed"})
+		return
+	}
+
+	// найти юзера
+	u, err := h.Store.FindUserByProviderID(ctx, "google", gu.Sub)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "db error"})
+		return
+	}
+
+	if u == nil {
+		// попытка по email, если уже есть локальная регистрация — привязываем
+		ex, err := h.Store.FindUserByEmail(ctx, strings.ToLower(gu.Email))
+		if err != nil {
+			c.JSON(500, gin.H{"error": "db error"})
+			return
+		}
+
+		if ex != nil {
+			// апдейтим провайдера (можно сделать отдельным методом UpdateUserProvider)
+			ex.Provider = "google"
+			ex.ExternalID = gu.Sub
+			ex.Verified = ex.Verified || gu.EmailVerified
+			// простой апдейт:
+			_, err := h.Store.DB.Collection("users").UpdateByID(ctx, ex.ID, bson.M{
+				"$set": bson.M{"provider": "google", "external_id": gu.Sub, "verified": ex.Verified},
+			})
+			if err != nil {
+				c.JSON(500, gin.H{"error": "db error"})
+				return
+			}
+			u = ex
+		} else {
+			// создаём нового OAuth-пользователя
+			u = &domain.User{
+				Email:      strings.ToLower(gu.Email),
+				Name:       gu.Name,
+				Provider:   "google",
+				ExternalID: gu.Sub,
+				Verified:   gu.EmailVerified,
+			}
+			if err := h.Store.CreateOAuthUser(ctx, u); err != nil {
+				c.JSON(409, gin.H{"error": "email already exists"})
+				return
+			}
+		}
+	}
+
+	// выдаём наши access (RS256 + kid) и refresh (с ротацией дальше по нашему флоу)
+	access, err := security.MakeAccessRS256(h.Keys, u.ID.String(), u.Email, 15*time.Minute)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "token error"})
+		return
+	}
+
+	familyID, _ := security.NewID()
+	jti, _ := security.NewID()
+	ref, _ := security.NewRefreshToken()
+	if err := h.Store.SaveRefresh(ctx, repo.RefreshToken{
+		UserID:    u.ID,
+		TokenHash: repo.HashToken(ref),
+		FamilyID:  familyID,
+		JTI:       jti,
+		ExpiresAt: time.Now().Add(h.RefreshTTL).UTC(),
+		UA:        c.Request.UserAgent(),
+		IP:        c.ClientIP(),
+	}); err != nil {
+		c.JSON(500, gin.H{"error": "refresh save"})
+		return
+	}
+
+	// (опц.) публикуем событие user.loggedin (provider=google)
+	if h.Events != nil {
+		rid := c.GetString("X-Request-ID")
+		go h.Events.Publish(ctx, "auth.events", "user.loggedin",
+			queue.UserLoggedIn{UserID: u.ID, Email: u.Email}, rid)
+	}
+
+	// Вернём JSON, чтобы было удобно тестировать из Postman (а не только через редирект на фронт)
+	c.JSON(200, gin.H{"access": access, "refresh": ref, "provider": "google"})
+}
+
+// маленький аксессор, чтобы не тащить cfg в Handler напрямую
+func (h *Handler) GoogleClientID() string { return h.GoogleClientIDFromConfig } // или храни в Handler строкой
 
 type refreshReq struct {
 	Refresh string `json:"refresh"`

@@ -8,6 +8,7 @@ import (
 	api "github.com/tazhibayda/auth-service/internal/http"
 	"github.com/tazhibayda/auth-service/internal/log"
 	"github.com/tazhibayda/auth-service/internal/metrics"
+	"github.com/tazhibayda/auth-service/internal/oauth"
 	"github.com/tazhibayda/auth-service/internal/queue"
 	"github.com/tazhibayda/auth-service/internal/repo"
 	"github.com/tazhibayda/auth-service/internal/security"
@@ -90,8 +91,10 @@ func main() {
 	if err != nil {
 		log.L.Fatal("keys", zap.Error(err))
 	}
+	g := oauth.NewGoogle(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURI, cfg.OAuthStateSecret)
 
-	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays, rds, cfg.RateLimitPerMin, pub, km)
+	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays, rds, cfg.RateLimitPerMin, pub, g, km)
+	h.SetGoogleClientID(cfg.GoogleClientID)
 	r := api.NewRouter(h)
 	r.Use(gintrace.Middleware("auth-service"))
 

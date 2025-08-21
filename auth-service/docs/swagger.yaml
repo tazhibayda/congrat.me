@@ -28,6 +28,47 @@ info:
   title: Auth Service API
   version: "1.0"
 paths:
+  /api/auth/google/callback:
+    get:
+      parameters:
+      - description: state
+        in: query
+        name: state
+        required: true
+        type: string
+      - description: code
+        in: query
+        name: code
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      tags:
+      - oauth
+  /api/auth/google/login:
+    get:
+      responses:
+        "302":
+          description: Found
+      tags:
+      - oauth
   /api/auth/login:
     post:
       consumes:

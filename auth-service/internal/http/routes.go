@@ -24,6 +24,9 @@ func NewRouter(h *Handler) *gin.Engine {
 
 	api := r.Group("/api/auth")
 	{
+		api.GET("/google/login", h.GoogleLogin)
+		api.GET("/google/callback", h.GoogleCallback)
+
 		api.POST("/register", rl, h.Register)
 		api.POST("/login", rl, h.Login)
 		api.POST("/refresh", h.Refresh)

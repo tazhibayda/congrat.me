@@ -87,6 +87,40 @@ func (s *Store) FindUserByEmail(ctx context.Context, email string) (*domain.User
 	return &u, err
 }
 
+func (s *Store) FindUserByProviderID(ctx context.Context, provider, externalID string) (*domain.User, error) {
+	span, ctx := tracer.StartSpanFromContext(ctx, "mongo.find_user_by_provider_id",
+		tracer.Tag("collection", "users"),
+		tracer.Tag("provider", provider),
+		tracer.Tag("external_id", externalID),
+	)
+	defer span.Finish()
+	var u domain.User
+	err := s.DB.Collection("users").FindOne(ctx, bson.M{
+		"provider": provider, "external_id": externalID,
+	}).Decode(&u)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		span.SetTag("error", err)
+		return nil, err
+	}
+	return &u, err
+}
+
+func (s *Store) CreateOAuthUser(ctx context.Context, u *domain.User) error {
+	span, ctx := tracer.StartSpanFromContext(ctx, "mongo.create_oauth_user",
+		tracer.Tag("collection", "users"),
+		tracer.Tag("email", u.Email),
+	)
+	defer span.Finish()
+	u.CreatedAt = time.Now().UTC()
+	u.Provider = "google"
+	u.Verified = true // Assume Google users are always verified
+	_, err := s.DB.Collection("users").InsertOne(ctx, u)
+	return err
+}
+
 func (s *Store) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
