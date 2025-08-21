@@ -112,7 +112,49 @@ func (h *Handler) Register(c *gin.Context) {
 	}(span)
 
 	Logger(c).Info("user_registered", zap.String("email_hash", helper.Hash8(u.Email)))
-	c.Status(http.StatusCreated)
+	vt, _ := security.NewOpaqueToken()
+	_ = h.Store.CreateEmailToken(c.Request.Context(), repo.EmailToken{
+		UserID: u.ID, Token: vt, Purpose: "verify", ExpiresAt: time.Now().Add(24 * time.Hour).UTC(),
+	})
+	// (опц.) Паблишим событие в RabbitMQ для notify-service
+	if h.Events != nil {
+		rid := c.GetString("X-Request-ID")
+		go h.Events.Publish(c.Request.Context(), "auth.events", "email.verify.requested",
+			map[string]any{"user_id": u.ID, "email": u.Email, "token": vt}, rid)
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"verify_token_dev": vt})
+	return
+}
+
+// GET /api/auth/verify?token=...
+func (h *Handler) VerifyEmail(c *gin.Context) {
+	t := c.Query("token")
+	if t == "" {
+		c.JSON(400, gin.H{"error": "missing token"})
+		return
+	}
+	et, err := h.Store.UseEmailToken(c.Request.Context(), t, "verify")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid or used token"})
+		return
+	}
+
+	// пометить пользователя verified
+	_, err = h.Store.DB.Collection("users").UpdateByID(c.Request.Context(), et.UserID, bson.M{"$set": bson.M{"verified": true}})
+	if err != nil {
+		c.JSON(500, gin.H{"error": "db error"})
+		return
+	}
+
+	// (опц.) событие
+	if h.Events != nil {
+		rid := c.GetString("X-Request-ID")
+		go h.Events.Publish(c.Request.Context(), "auth.events", "email.verified",
+			map[string]any{"user_id": et.UserID}, rid)
+	}
+
+	c.JSON(200, gin.H{"status": "verified"})
 }
 
 type loginReq struct {

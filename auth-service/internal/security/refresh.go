@@ -20,3 +20,4 @@ func NewID() (string, error) { // для JTI/Family
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
+func NewOpaqueToken() (string, error) { return NewRefreshToken() }

@@ -38,8 +38,8 @@ func Load() Config {
 		JWTActiveKeyPath:   getenv("JWT_ACTIVE_PRIVATE_PATH", "./keys/active.pem"),
 		JWTNextKID:         getenv("JWT_NEXT_KID", ""),
 		JWTNextKeyPath:     getenv("JWT_NEXT_PRIVATE_PATH", ""),
-		GoogleClientID:     getenv("GOOGLE_CLIENT_ID", ""),
-		GoogleClientSecret: getenv("GOOGLE_CLIENT_SECRET", ""),
+		GoogleClientID:     getenv("GOOGLE_CLIENT_ID", "1098225664873-8t53605sg910efmtbod99dj6jl4oukil.apps.googleusercontent.com"),
+		GoogleClientSecret: getenv("GOOGLE_CLIENT_SECRET", "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"),
 		GoogleRedirectURI:  getenv("GOOGLE_REDIRECT_URI", "http://localhost:8080/api/auth/google/callback"),
 		OAuthStateSecret:   getenv("OAUTH_STATE_SECRET", "dev-state-secret-change-me"),
 	}

@@ -64,6 +64,9 @@ func main() {
 	if err := store.EnsureRefreshIndexes(ctx); err != nil {
 		log.L.Fatal("ensure refresh indexes failed", zap.Error(err))
 	}
+	if err := store.EnsureEmailTokenIndexes(ctx); err != nil {
+		log.L.Fatal("ensure email indexes: %v", zap.Error(err))
+	}
 
 	log.L.Info("mongo connected and indexes ensured",
 		zap.String("db", cfg.MongoDB),

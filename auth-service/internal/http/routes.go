@@ -28,6 +28,7 @@ func NewRouter(h *Handler) *gin.Engine {
 		api.GET("/google/callback", h.GoogleCallback)
 
 		api.POST("/register", rl, h.Register)
+		api.GET("/verify", h.VerifyEmail)
 		api.POST("/login", rl, h.Login)
 		api.POST("/refresh", h.Refresh)
 		api.POST("/logout", h.Logout)
