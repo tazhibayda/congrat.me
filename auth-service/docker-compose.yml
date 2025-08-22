@@ -1,0 +1,73 @@
+version: "3.9"
+services:
+  mongo:
+    image: mongo:6
+    ports: ["27017:27017"]
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+  rabbit:
+    image: rabbitmq:3-management
+    ports: ["5672:5672", "15672:15672"]
+
+  # 🔵 Datadog Agent
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:latest
+    environment:
+      # обязательные:
+      DD_API_KEY: ${DD_API_KEY}
+      DD_SITE: ${DD_SITE}
+      DD_ENV: dev
+      DD_APM_ENABLED: "true"                  # APM/Traces
+      DD_APM_NON_LOCAL_TRAFFIC: "true"        # принимать из других контейнеров
+      DD_LOGS_ENABLED: "true"                 # сбор логов контейнеров
+      DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "true"
+      DD_PROMETHEUS_SCRAPE: "true"
+    ports:
+      - "8126:8126/tcp"   # APM intake (agent ← app)
+      - "8125:8125/udp"   # DogStatsD (metrics, если понадобится)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # логи контейнеров
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+    restart: unless-stopped
+
+  auth:
+    build: .
+    depends_on: [mongo, redis, rabbit, datadog-agent]
+    ports: ["8080:8080"]
+    environment:
+      APP_PORT: "8080"
+      MONGO_URI: "mongodb://mongo:27017"
+      MONGO_DB: "auth_db"
+      REDIS_ADDR: "redis:6379"
+      RABBIT_URL: "amqp://guest:guest@rabbit:5672/"
+      JWT_ACTIVE_KID: "kid-local-A"
+      JWT_ACTIVE_PRIVATE_PATH: "/run/keys/active.pem"
+      JWT_NEXT_KID: "kid-local-N"
+      JWT_NEXT_PRIVATE_PATH: "/run/keys/next.pem"
+      RATE_LIMIT_PER_MIN: "5"
+
+      # 🔶 Datadog correlation / APM теги для сервиса
+      DD_ENV: "dev"
+      DD_SERVICE: "auth-service"
+      DD_VERSION: "0.1.0"
+      # куда слать трейсы (dd-trace-go сам читает эти переменные)
+      DD_AGENT_HOST: "datadog-agent"
+      DD_TRACE_AGENT_PORT: "8126"
+      # DogStatsD
+      DD_DOGSTATSD_PORT: "8125"
+    labels:
+      # 🔹 Автоскрейп Prometheus агентом с /metrics
+      com.datadoghq.ad.check_names: '["openmetrics"]'
+      com.datadoghq.ad.init_configs: '[{}]'
+      com.datadoghq.ad.instances: |
+        [
+          {"prometheus_url": "http://%%host%%:8080/metrics", "namespace":"auth", "metrics":["*"]}
+        ]
+      com.datadoghq.ad.logs: >
+          [
+            {"source":"go","service":"auth-service"}
+          ]
+    volumes:
+      - ./keys:/run/keys:ro

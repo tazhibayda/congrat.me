@@ -1,6 +1,5 @@
 .git
 .gitignore
-docs
 testdata
 *.md
 **/*.log
