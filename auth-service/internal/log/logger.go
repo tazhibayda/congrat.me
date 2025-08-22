@@ -11,6 +11,7 @@ func Init(prod bool) (func() error, error) {
 	} else {
 		L, err = zap.NewDevelopment()
 	}
+	
 	if err != nil {
 		return nil, err
 	}

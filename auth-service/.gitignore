@@ -1,0 +1,6 @@
+testdata
+*.md
+**/*.log
+keys
+.env
+dist/

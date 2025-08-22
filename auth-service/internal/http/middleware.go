@@ -64,8 +64,13 @@ type LimiterDeps struct {
 	Window time.Duration // обычно 1 мин
 }
 
-func RateLimit(dep LimiterDeps) gin.HandlerFunc {
+func RateLimit(dep *LimiterDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if dep == nil || dep.R == nil || dep.R.C == nil || dep.Limit <= 0 {
+			c.Next()
+			return
+		}
+
 		ip := c.ClientIP()
 		route := c.FullPath() // /api/auth/login или /api/auth/register
 		if route == "" {

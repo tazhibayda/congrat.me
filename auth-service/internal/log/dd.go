@@ -13,6 +13,9 @@ import (
 // Adds: dd.trace_id, dd.span_id. (As strings — так ожидает Datadog).
 func WithDD(ctx context.Context, base *zap.Logger, extra ...zap.Field) *zap.Logger {
 	l := base
+	if l == nil { // <-- добавь это
+		l = zap.NewNop()
+	}
 	if sp, ok := tracer.SpanFromContext(ctx); ok && sp != nil {
 		if sc, ok := sp.Context().(ddtrace.SpanContext); ok {
 			tid := fmt.Sprintf("%d", sc.TraceID())

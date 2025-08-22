@@ -51,13 +51,13 @@ type Handler struct {
 	RefreshTTL               time.Duration
 	Redis                    *repo.Redis
 	RateLimitPerMin          int
-	Events                   *queue.Publisher
+	Events                   queue.Publisher
 	Google                   *oauth.GoogleOAuth
 	GoogleClientIDFromConfig string
 	Keys                     *security.KeyManager
 }
 
-func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.Redis, rlPerMin int, pub *queue.Publisher, google *oauth.GoogleOAuth, keys *security.KeyManager) *Handler {
+func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.Redis, rlPerMin int, pub queue.Publisher, keys *security.KeyManager) *Handler {
 	return &Handler{
 		Store:           store,
 		JWTSecret:       jwtSecret,
@@ -65,7 +65,6 @@ func NewHandler(store *repo.Store, jwtSecret string, refreshDays int, rds *repo.
 		Redis:           rds,
 		RateLimitPerMin: rlPerMin,
 		Events:          pub,
-		Google:          google,
 		Keys:            keys,
 	}
 }
@@ -127,9 +126,10 @@ func (h *Handler) Register(c *gin.Context) {
 	iSpan.Finish()
 
 	rid := c.GetString("X-Request-ID")
+	pub := h.Events
 	go func(parent tracer.Span) {
 		pubSpan := tracer.StartSpan("auth.register.publish", tracer.ChildOf(parent.Context()))
-		_ = h.Events.Publish(context.Background(), "auth.events", "user.registered",
+		_ = pub.Publish(context.Background(), "auth.events", "user.registered",
 			queue.UserRegistered{UserID: u.ID, Email: u.Email, Name: u.Name}, rid)
 		pubSpan.Finish()
 	}(span)
@@ -139,16 +139,11 @@ func (h *Handler) Register(c *gin.Context) {
 	_ = h.Store.CreateEmailToken(c.Request.Context(), repo.EmailToken{
 		UserID: u.ID, Token: vt, Purpose: "verify", ExpiresAt: time.Now().Add(24 * time.Hour).UTC(),
 	})
-	if err != nil {
-		span.SetTag("error", err)
-		Logger(c).Error("email_token_create_error", zap.Error(err))
-	}
+
 	// (опц.) Паблишим событие в RabbitMQ для notify-service
-	if h.Events != nil {
-		rid := c.GetString("X-Request-ID")
-		go h.Events.Publish(c.Request.Context(), "auth.events", "email.verify.requested",
-			map[string]any{"user_id": u.ID, "email": u.Email, "token": vt}, rid)
-	}
+
+	go pub.Publish(c.Request.Context(), "auth.events", "email.verify.requested",
+		map[string]any{"user_id": u.ID, "email": u.Email, "token": vt}, rid)
 
 	Logger(c).Info("email_verify_token_issued_dev",
 		zap.String("user_id", u.ID.String()),
@@ -232,16 +227,15 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 	saveSpan.Finish()
 
-	if h.Events != nil {
-		rid := c.GetString("X-Request-ID")
-		parent := span // для связи в трейсе
-		go func() {
-			pubSpan := tracer.StartSpan("auth.login.publish", tracer.ChildOf(parent.Context()))
-			_ = h.Events.Publish(context.Background(), "auth.events", "user.loggedin",
-				queue.UserLoggedIn{UserID: u.ID, Email: u.Email}, rid)
-			pubSpan.Finish()
-		}()
-	}
+	rid := c.GetString("X-Request-ID")
+	parent := span // для связи в трейсе
+	pub := h.Events
+	go func() {
+		pubSpan := tracer.StartSpan("auth.login.publish", tracer.ChildOf(parent.Context()))
+		_ = pub.Publish(context.Background(), "auth.events", "user.loggedin",
+			queue.UserLoggedIn{UserID: u.ID, Email: u.Email}, rid)
+		pubSpan.Finish()
+	}()
 
 	span.SetTag("user_id", u.ID)
 	c.JSON(http.StatusOK, loginResp{Access: tok, Refresh: ref})
@@ -617,16 +611,16 @@ func (h *Handler) GoogleCallback(c *gin.Context) {
 	tSpan.Finish()
 
 	// (опц.) публикуем событие user.loggedin (provider=google)
-	if h.Events != nil {
-		parent := span
-		rid := c.GetString("X-Request-ID")
-		go func() {
-			pubSpan := tracer.StartSpan("auth.loggedin.publish", tracer.ChildOf(parent.Context()))
-			_ = h.Events.Publish(context.Background(), "auth.events", "user.loggedin",
-				queue.UserLoggedIn{UserID: u.ID, Email: u.Email}, rid)
-			pubSpan.Finish()
-		}()
-	}
+
+	parent := span
+	rid := c.GetString("X-Request-ID")
+	pub := h.Events
+	go func() {
+		pubSpan := tracer.StartSpan("auth.loggedin.publish", tracer.ChildOf(parent.Context()))
+		_ = pub.Publish(context.Background(), "auth.events", "user.loggedin",
+			queue.UserLoggedIn{UserID: u.ID, Email: u.Email}, rid)
+		pubSpan.Finish()
+	}()
 
 	// Вернём JSON, чтобы было удобно тестировать из Postman (а не только через редирект на фронт)
 	span.SetTag("user_id", u.ID)
@@ -688,15 +682,15 @@ func (h *Handler) VerifyEmail(c *gin.Context) {
 	updSpan.Finish()
 
 	// (опц.) событие
-	if h.Events != nil {
-		parent := span
-		rid := c.GetString("X-Request-ID")
-		go func() {
-			pubSpan := tracer.StartSpan("email.verified.publish", tracer.ChildOf(parent.Context()))
-			_ = h.Events.Publish(context.Background(), "auth.events", "email.verified", map[string]any{"user_id": et.UserID}, rid)
-			pubSpan.Finish()
-		}()
-	}
+
+	parent := span
+	rid := c.GetString("X-Request-ID")
+	pub := h.Events
+	go func() {
+		pubSpan := tracer.StartSpan("email.verified.publish", tracer.ChildOf(parent.Context()))
+		_ = pub.Publish(context.Background(), "auth.events", "email.verified", map[string]any{"user_id": et.UserID}, rid)
+		pubSpan.Finish()
+	}()
 
 	Logger(c).Info("email_verified", zap.String("user_id", et.UserID.String()))
 	c.JSON(200, gin.H{"status": "verified"})
@@ -736,16 +730,17 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 			span.SetTag("error", err)
 			Logger(c).Error("reset_token_create_error", zap.Error(err))
 		}
-		if h.Events != nil {
-			parent := span
-			rid := c.GetString("X-Request-ID")
-			go func() {
-				pubSpan := tracer.StartSpan("password.reset.requested.publish", tracer.ChildOf(parent.Context()))
-				_ = h.Events.Publish(context.Background(), "auth.events", "password.reset.requested",
-					map[string]any{"user_id": u.ID, "email": u.Email, "token": rt}, rid)
-				pubSpan.Finish()
-			}()
-		}
+
+		parent := span
+		rid := c.GetString("X-Request-ID")
+		pub := h.Events
+		go func() {
+			pubSpan := tracer.StartSpan("password.reset.requested.publish", tracer.ChildOf(parent.Context()))
+			_ = pub.Publish(context.Background(), "auth.events", "password.reset.requested",
+				map[string]any{"user_id": u.ID, "email": u.Email, "token": rt}, rid)
+			pubSpan.Finish()
+		}()
+
 		// dev: выдадим токен в ответ, чтобы не настраивать smtp прямо сейчас
 		Logger(c).Info("password_reset_token_issued_dev", zap.String("user_id", u.ID.String()), zap.String("email_hash", helper.Hash8(u.Email)))
 		c.JSON(200, gin.H{"status": "ok", "reset_token_dev": rt})
@@ -821,16 +816,15 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 	)
 	rvSpan.Finish()
 
-	if h.Events != nil {
-		parent := span
-		rid := c.GetString("X-Request-ID")
-		go func() {
-			pubSpan := tracer.StartSpan("password.reset.done.publish", tracer.ChildOf(parent.Context()))
-			_ = h.Events.Publish(context.Background(), "auth.events", "password.reset.done",
-				map[string]any{"user_id": et.UserID}, rid)
-			pubSpan.Finish()
-		}()
-	}
+	parent := span
+	rid := c.GetString("X-Request-ID")
+	pub := h.Events
+	go func() {
+		pubSpan := tracer.StartSpan("password.reset.done.publish", tracer.ChildOf(parent.Context()))
+		_ = pub.Publish(context.Background(), "auth.events", "password.reset.done",
+			map[string]any{"user_id": et.UserID}, rid)
+		pubSpan.Finish()
+	}()
 
 	Logger(c).Info("password_updated", zap.String("user_id", et.UserID.String()))
 	c.JSON(200, gin.H{"status": "password_updated"})

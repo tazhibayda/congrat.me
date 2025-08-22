@@ -87,7 +87,16 @@ func main() {
 	defer rds.Close()
 	log.L.Info("connected to Redis ", zap.String("addr", cfg.RedisAddr))
 
-	pub, err := queue.NewPublisher(cfg.RabbitURL)
+	var pub queue.Publisher = queue.NewNoop()
+	if cfg.RabbitURL != "" {
+		if p, err := queue.NewRabbit(cfg.RabbitURL, "auth.events"); err == nil {
+			pub = p
+			defer pub.Close()
+		} else {
+			log.L.Warn("rabbit disabled, falling back to noop", zap.Error(err))
+		}
+	}
+
 	if err != nil {
 		log.L.Fatal("rabbit connect", zap.Error(err))
 	}
@@ -99,7 +108,8 @@ func main() {
 	}
 	g := oauth.NewGoogle(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURI, cfg.OAuthStateSecret)
 
-	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays, rds, cfg.RateLimitPerMin, pub, g, km)
+	h := api.NewHandler(store, cfg.JWTSecret, cfg.RefreshTTLDays, rds, cfg.RateLimitPerMin, pub, km)
+	h.Google = g
 	h.SetGoogleClientID(cfg.GoogleClientID)
 	r := api.NewRouter(h)
 	r.Use(gintrace.Middleware("auth-service"))

@@ -20,7 +20,7 @@ func NewRouter(h *Handler) *gin.Engine {
 
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
-	rl := RateLimit(LimiterDeps{R: h.Redis, Limit: h.RateLimitPerMin, Window: time.Minute})
+	rl := RateLimit(&LimiterDeps{R: h.Redis, Limit: h.RateLimitPerMin, Window: time.Minute})
 
 	api := r.Group("/api/auth")
 	{
