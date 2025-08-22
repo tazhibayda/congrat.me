@@ -1,0 +1,28 @@
+# k8s/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: auth-allow-ingress
+  namespace: greetings
+spec:
+  podSelector:
+    matchLabels: { app: auth-service }
+  policyTypes: [ Ingress, Egress ]
+  ingress:
+    - from:
+        - namespaceSelector: {}   # отовсюду внутри кластера (упростим)
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }  # разрешаем исходящий наружу (Mongo/Redis/Rabbit/DNS)
+      ports:
+        - protocol: TCP
+          port: 27017   # Mongo
+        - protocol: TCP
+          port: 6379    # Redis
+        - protocol: TCP
+          port: 5672    # Rabbit
+        - protocol: TCP
+          port: 443     # Google OAuth, прочие внешние

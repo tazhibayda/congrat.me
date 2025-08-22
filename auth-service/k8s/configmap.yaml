@@ -1,0 +1,21 @@
+# k8s/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-config
+  namespace: greetings
+data:
+  APP_PORT: "8080"
+  MONGO_URI: "mongodb://mongo:27017"     # TODO: свой адрес/секрет, если внешний кластер Mongo
+  MONGO_DB: "auth_db"
+  REDIS_ADDR: "redis:6379"               # TODO: если используешь Redis в кластере
+  RABBIT_URL: "amqp://guest:guest@rabbit:5672/"  # TODO
+  RATE_LIMIT_PER_MIN: "5"
+  # RS256 ключи смонтированы в /run/keys
+  JWT_ACTIVE_KID: "kid-k8s-A"
+  JWT_ACTIVE_PRIVATE_PATH: "/run/keys/active.pem"
+  JWT_NEXT_KID: "kid-k8s-N"
+  JWT_NEXT_PRIVATE_PATH: "/run/keys/next.pem"
+  # OAuth redirect (если включаешь Google OAuth)
+  GOOGLE_REDIRECT_URI: "https://auth.tazhibayda.tech/api/auth/google/callback"
+  OAUTH_STATE_SECRET: "change-me-long-secret"

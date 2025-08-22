@@ -47,7 +47,7 @@ services:
       JWT_NEXT_KID: "kid-local-N"
       JWT_NEXT_PRIVATE_PATH: "/run/keys/next.pem"
       RATE_LIMIT_PER_MIN: "5"
-
+      GOOGLE_REDIRECT_URI: "http://auth.tazhibayda.tech:8080/api/auth/google/callback"
       # 🔶 Datadog correlation / APM теги для сервиса
       DD_ENV: "dev"
       DD_SERVICE: "auth-service"

@@ -1,0 +1,10 @@
+# k8s/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: auth-pdb
+  namespace: greetings
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: auth-service }

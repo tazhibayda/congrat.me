@@ -1,0 +1,25 @@
+# k8s/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: auth-ingress
+  namespace: greetings
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+#    cert-manager.io/cluster-issuer: "letsencrypt"
+#    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+#  tls:
+#    - hosts: [  "auth.tazhibayda.tech"  ]      # TODO: твой домен
+#      secretName: auth-tls
+  rules:
+    - host: auth.tazhibayda.tech              # TODO
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 80
