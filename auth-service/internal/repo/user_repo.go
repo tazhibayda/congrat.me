@@ -42,11 +42,15 @@ func (s *Store) CreateUser(ctx context.Context, u *domain.User) error {
 	defer sp.Finish()
 
 	u.CreatedAt = time.Now().UTC()
-	_, err := s.DB.Collection("users").InsertOne(ctx, u)
+	res, err := s.DB.Collection("users").InsertOne(ctx, u)
 	if err != nil {
 		sp.SetTag("error", err)
+		return err
 	}
-	return err
+	if oid, ok := res.InsertedID.(primitive.ObjectID); ok {
+		u.ID = oid
+	}
+	return nil
 }
 
 func (s *Store) FindUserByID(ctx context.Context, id primitive.ObjectID) (*domain.User, error) {
