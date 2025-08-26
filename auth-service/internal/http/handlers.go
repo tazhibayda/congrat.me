@@ -146,7 +146,7 @@ func (h *Handler) Register(c *gin.Context) {
 		map[string]any{"user_id": u.ID, "email": u.Email, "token": vt}, rid)
 
 	Logger(c).Info("email_verify_token_issued_dev",
-		zap.String("user_id", u.ID.String()),
+		zap.String("user_id", u.ID.Hex()),
 		zap.String("email_hash", helper.Hash8(u.Email)),
 	)
 	c.JSON(http.StatusCreated, gin.H{"verify_token_dev": vt})
@@ -185,7 +185,7 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 	accSpan, _ := tracer.StartSpanFromContext(ctx, "auth.login.issue_access")
-	tok, err := security.MakeAccessRS256(h.Keys, u.ID.String(), u.Email, 15*time.Minute)
+	tok, err := security.MakeAccessRS256(h.Keys, u.ID.Hex(), u.Email, 15*time.Minute)
 	if err != nil {
 		accSpan.SetTag("error", err)
 		accSpan.Finish()
@@ -316,7 +316,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 	uSpan.Finish()
 
 	aSpan, _ := tracer.StartSpanFromContext(ctx, "auth.refresh.issue_access")
-	tok, err := security.MakeAccessRS256(h.Keys, u.ID.String(), u.Email, 15*time.Minute)
+	tok, err := security.MakeAccessRS256(h.Keys, u.ID.Hex(), u.Email, 15*time.Minute)
 	if err != nil {
 		aSpan.SetTag("error", err)
 		aSpan.Finish()
@@ -581,7 +581,7 @@ func (h *Handler) GoogleCallback(c *gin.Context) {
 
 	tSpan, _ := tracer.StartSpanFromContext(ctx, "auth.issue_tokens")
 	// выдаём наши access (RS256 + kid) и refresh (с ротацией дальше по нашему флоу)
-	access, err := security.MakeAccessRS256(h.Keys, u.ID.String(), u.Email, 15*time.Minute)
+	access, err := security.MakeAccessRS256(h.Keys, u.ID.Hex(), u.Email, 15*time.Minute)
 	if err != nil {
 		tSpan.SetTag("error", err)
 		tSpan.Finish()
@@ -626,7 +626,7 @@ func (h *Handler) GoogleCallback(c *gin.Context) {
 	span.SetTag("user_id", u.ID)
 	span.SetTag("email_hash", helper.Hash8(u.Email))
 	Logger(c).Info("oauth_google_success",
-		zap.String("user_id", u.ID.String()),
+		zap.String("user_id", u.ID.Hex()),
 		zap.String("email_hash", helper.Hash8(u.Email)),
 	)
 	c.JSON(200, gin.H{"access": access, "refresh": ref, "provider": "google"})
@@ -692,7 +692,7 @@ func (h *Handler) VerifyEmail(c *gin.Context) {
 		pubSpan.Finish()
 	}()
 
-	Logger(c).Info("email_verified", zap.String("user_id", et.UserID.String()))
+	Logger(c).Info("email_verified", zap.String("user_id", et.UserID.Hex()))
 	c.JSON(200, gin.H{"status": "verified"})
 }
 
@@ -826,7 +826,7 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 		pubSpan.Finish()
 	}()
 
-	Logger(c).Info("password_updated", zap.String("user_id", et.UserID.String()))
+	Logger(c).Info("password_updated", zap.String("user_id", et.UserID.Hex()))
 	c.JSON(200, gin.H{"status": "password_updated"})
 }
 
