@@ -30,7 +30,6 @@ services:
       - "8126:8126/tcp"   # APM intake (agent ← app)
       - "8125:8125/udp"   # DogStatsD (metrics, если понадобится)
     volumes:
-      - mongo_data:/var/lib/mongo:ro               # если нужно мониторить MongoDB
       - /var/run/docker.sock:/var/run/docker.sock:ro   # логи контейнеров
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
