@@ -1,15 +1,15 @@
 # --- builder ---
-FROM golang:1.23 AS builder
+FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 
-# кешируем зависимости
+# кеш зависимостей
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 # сборка
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/congrats ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/congrats ./cmd/server
 
 # --- runtime ---
 FROM alpine:3.20
