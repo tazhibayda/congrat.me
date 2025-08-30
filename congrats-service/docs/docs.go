@@ -204,7 +204,7 @@ var SwaggerInfo = &swag.Spec{
 	Version:          "0.1.0",
 	Host:             "",
 	BasePath:         "/",
-	Schemes:          []string{"http"},
+	Schemes:          []string{"http", "https"},
 	Title:            "Congrats API",
 	Description:      "API for creating greeting threads and messages.",
 	InfoInstanceName: "swagger",

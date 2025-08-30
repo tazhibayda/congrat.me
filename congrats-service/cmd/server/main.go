@@ -15,7 +15,7 @@ import (
 // @title Congrats API
 // @version 0.1.0
 // @description API for creating greeting threads and messages.
-// @schemes http
+// @schemes http https
 // @BasePath /
 // @securityDefinitions.apikey BearerAuth
 // @in header
