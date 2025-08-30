@@ -1,0 +1,125 @@
+basePath: /
+definitions:
+  http.createThreadReq:
+    properties:
+      title:
+        type: string
+      ttl_days:
+        description: 0|1|7|30
+        type: integer
+    type: object
+  http.submitReq:
+    properties:
+      author:
+        type: string
+      message:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: API for creating greeting threads and messages.
+  title: Congrats API
+  version: 0.1.0
+paths:
+  /api/congrats/threads:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: title, ttl_days(0|1|7|30)
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/http.createThreadReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      tags:
+      - threads
+  /api/congrats/threads/{slug}/submit:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: thread slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: author(optional), message
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/http.submitReq'
+      responses:
+        "201":
+          description: Created
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      tags:
+      - greetings
+  /api/congrats/threads/{slug}/view:
+    get:
+      parameters:
+      - description: thread slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      tags:
+      - greetings
+schemes:
+- http
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

@@ -53,6 +53,10 @@ func (s *Store) EnsureIndexes(ctx context.Context) error {
 			Options: options.Index().SetName("owner_created_desc"),
 		},
 		{
+			Keys:    bson.D{{Key: "thread_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("thread_created_desc"),
+		},
+		{
 			// TTL: удаляем документ, когда наступает expires_at (expireAfterSeconds=0)
 			Keys:    bson.D{{Key: "expires_at", Value: 1}},
 			Options: options.Index().SetExpireAfterSeconds(0).SetName("ttl_expire"),

@@ -3,12 +3,15 @@ package repo
 import (
 	"context"
 	"errors"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"strings"
 	"time"
 
 	"github.com/tazhibayda/congrats-service/internal/domain"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	_ "go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var (
@@ -32,7 +35,10 @@ func (s *Store) CreateThread(ctx context.Context, t *domain.Thread) error {
 		t.ExpiresAt = nil // "навсегда" — без TTL-поля
 	}
 
-	_, err := s.colThreads.InsertOne(ctx, t)
+	res, err := s.colThreads.InsertOne(ctx, t)
+	if oid, ok := res.InsertedID.(primitive.ObjectID); ok {
+		t.ID = oid
+	}
 	if IsDup(err) {
 		return ErrSlugExists
 	}
@@ -91,4 +97,4 @@ func (s *Store) DeleteThreadByOwner(ctx context.Context, slug, owner string) (bo
 }
 
 // маленький хелпер — чтобы не тащить import options в каждую функцию
-func optionsFind() *mongo.FindOptions { return &mongo.FindOptions{} }
+func optionsFind() *options.FindOptions { return options.Find() }
