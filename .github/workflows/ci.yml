@@ -1,0 +1,19 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        svc: [auth-service, congrats-service, notify-service]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.23' }
+      - name: Go build
+        working-directory: ${{ matrix.svc }}
+        run: |
+          go mod download
+          go vet ./...
+          go test ./... -race -count=1
+          go build ./cmd/server

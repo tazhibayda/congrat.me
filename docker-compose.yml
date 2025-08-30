@@ -2,16 +2,32 @@ version: "3.9"
 services:
   mongo:
     image: mongo:6
-#    command: [ "mongod", "--replSet", "rs0", "--bind_ip_all" ]
     ports: ["27017:27017"]
+    volumes: [mongo_data:/data/db]
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   redis:
     image: redis:7
-    ports: ["6379:6379"]
-  rabbit:
+    ports: [ "6379:6379" ]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
     image: rabbitmq:3-management
     ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # 🔵 Datadog Agent
   datadog-agent:
     image: gcr.io/datadoghq/agent:latest
     environment:
@@ -33,10 +49,8 @@ services:
       - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
     restart: unless-stopped
 
-  auth:
-    build: .
-    depends_on: [mongo, redis, rabbit, datadog-agent]
-    ports: ["8080:8080"]
+  auth-service:
+    build: ./auth-service
     environment:
       APP_PORT: "8080"
       MONGO_URI: "mongodb://mongo:27017"
@@ -44,12 +58,14 @@ services:
       REDIS_ADDR: "redis:6379"
       RABBIT_URL: "amqp://guest:guest@rabbit:5672/"
       JWT_ACTIVE_KID: "kid-local-A"
-      JWT_ACTIVE_PRIVATE_PATH: "/run/keys/active.pem"
+      JWT_ACTIVE_PRIVATE_PATH: "/auth-service/keys/active.pem"
       JWT_NEXT_KID: "kid-local-N"
-      JWT_NEXT_PRIVATE_PATH: "/run/keys/next.pem"
-      RATE_LIMIT_PER_MIN: "5"
+      JWT_NEXT_PRIVATE_PATH: "/auth-service/keys/next.pem"
+      GOOGLE_CLIENT_ID: "xxx.apps.googleusercontent.com"
+      GOOGLE_CLIENT_SECRET: "changeme"
       GOOGLE_REDIRECT_URI: "https://auth.tazhibayda.tech/api/auth/google/callback"
-      # 🔶 Datadog correlation / APM теги для сервиса
+      OAUTH_STATE_SECRET: "dev-state-secret"
+      RATE_LIMIT_PER_MIN: "5"
       DD_ENV: "dev"
       DD_SERVICE: "auth-service"
       DD_VERSION: "0.1.0"
@@ -58,17 +74,36 @@ services:
       DD_TRACE_AGENT_PORT: "8126"
       # DogStatsD
       DD_DOGSTATSD_PORT: "8125"
-    labels:
-      # 🔹 Автоскрейп Prometheus агентом с /metrics
-      com.datadoghq.ad.check_names: '["openmetrics"]'
-      com.datadoghq.ad.init_configs: '[{}]'
-      com.datadoghq.ad.instances: |
-        [
-          {"prometheus_url": "http://%%host%%:8080/metrics", "namespace":"auth", "metrics":["*"]}
-        ]
-      com.datadoghq.ad.logs: >
-          [
-            {"source":"go","service":"auth-service"}
-          ]
-    volumes:
-      - ./keys:/run/keys:ro
+    ports: ["8080:8080"]
+    depends_on: [mongo, redis, rabbit, datadog-agent]
+    secrets:
+      - jwt_active
+
+  congrats-service:
+    build: ./congrats-service
+    environment:
+      APP_PORT: "8081"
+      MONGO_URI: "mongodb://mongo:27017"
+      MONGO_DB: "congrats_db"
+      AUTH_JWKS_URL: "http://auth-service:8080/.well-known/jwks.json"
+      JWKS_CACHE_SECONDS: "300"
+      RABBIT_URL: "amqp://guest:guest@rabbitmq:5672/"
+    ports: ["8081:8081"]
+    depends_on: [mongo, auth-service, rabbitmq]
+
+  notify-service:
+    build: ./notify-service
+    environment:
+      RABBIT_URL: "amqp://guest:guest@rabbitmq:5672/"
+      EXCHANGE: "congrats.events"
+      QUEUE: "greetq"
+      BIND_KEY: "greeting.created"
+      CONCURRENCY: "4"
+    depends_on: [rabbitmq]
+
+secrets:
+  jwt_active:
+    file: ./auth-service/keys/active.pem
+
+volumes:
+  mongo_data:
