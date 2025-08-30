@@ -1,24 +1,20 @@
-# --- build stage ---
+# --- builder ---
 FROM golang:1.23 AS builder
-WORKDIR /app
-
-# установим git (для go mod), ca-certificates
 RUN apk add --no-cache git ca-certificates
+WORKDIR /src
 
-# копируем go.mod/go.sum и качаем зависимости
+# кешируем зависимости
 COPY go.mod go.sum ./
 RUN go mod download
 
-# копируем весь код и собираем бинарник
+# сборка
 COPY . .
-RUN go build -o server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/congrats ./cmd/server
 
-# --- run stage ---
-FROM alpine:3.19
-WORKDIR /app
+# --- runtime ---
+FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
-
-COPY --from=builder /app/server .
+WORKDIR /app
+COPY --from=builder /out/congrats /usr/local/bin/congrats
 EXPOSE 8081
-
-CMD ["./server"]
+ENTRYPOINT ["congrats"]
